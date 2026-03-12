@@ -11,8 +11,9 @@
       <header>
         <h1>ScenicView Planner</h1>
         <p>
-          Build a scenic drive that still gets you there on time. Tune scenicness,
-          stop duration, and POI count, then export to Apple Maps or Google Maps.
+          Plan a scenic trip between a required departure and arrival time. ScenicView
+          estimates direct drive time automatically, then spends your remaining time on
+          meaningful scenic stops and places.
         </p>
       </header>
 
@@ -26,35 +27,18 @@
             </label>
             <label>
               Destination
-              <input
-                id="destination"
-                name="destination"
-                placeholder="Monterey, CA"
-                required
-              />
+              <input id="destination" name="destination" placeholder="Monterey, CA" required />
             </label>
           </div>
 
-          <div class="grid three">
+          <div class="grid two">
+            <label>
+              Depart at
+              <input id="departAt" name="departAt" type="datetime-local" required />
+            </label>
             <label>
               Arrive by
               <input id="arriveBy" name="arriveBy" type="datetime-local" required />
-            </label>
-            <label>
-              Depart at (optional)
-              <input id="departAt" name="departAt" type="datetime-local" />
-            </label>
-            <label>
-              Direct drive estimate (min)
-              <input
-                id="directMinutes"
-                name="directMinutes"
-                type="number"
-                min="1"
-                step="1"
-                placeholder="90"
-                required
-              />
             </label>
           </div>
 
@@ -62,24 +46,24 @@
           <div class="grid three">
             <label>
               Scenicness
-              <input id="scenicness" name="scenicness" type="range" min="0" max="100" value="70" />
-              <span id="scenicnessValue">70</span>
+              <input id="scenicness" name="scenicness" type="range" min="0" max="100" value="75" />
+              <span id="scenicnessValue">75</span>
             </label>
             <label>
-              Stop time preference
-              <input id="stopTime" name="stopTime" type="range" min="0" max="100" value="55" />
-              <span id="stopTimeValue">55</span>
+              Stop time preference (minutes)
+              <input id="stopTime" name="stopTime" type="number" min="0" max="180" value="30" required />
             </label>
             <label>
-              POI density
-              <input id="poiDensity" name="poiDensity" type="range" min="0" max="100" value="65" />
-              <span id="poiDensityValue">65</span>
+              Preferred stops (1-100)
+              <input id="preferredStops" name="preferredStops" type="number" min="1" max="100" value="8" required />
             </label>
           </div>
 
           <div class="checkbox-row">
-            <label><input type="checkbox" id="includeQuickPass" checked /> Include drive-through scenic points</label>
-            <label><input type="checkbox" id="includeStops" checked /> Include visit-worthy stops</label>
+            <label><input type="checkbox" id="includeDriveThrough" checked /> Include drive-through highlights</label>
+            <label><input type="checkbox" id="includeVisitStops" checked /> Include visit-worthy stops</label>
+            <label><input type="checkbox" id="includeFood" checked /> Include restaurants & food spots</label>
+            <label><input type="checkbox" id="includeParks" checked /> Include parks & recreation areas</label>
           </div>
 
           <button type="submit">Build scenic route</button>
