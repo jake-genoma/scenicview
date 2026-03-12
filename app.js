@@ -14,8 +14,8 @@ sliderIds.forEach((id) => {
   el.addEventListener('input', () => (out.textContent = el.value));
 });
 
-const wikiBase = 'https://en.wikipedia.org/w/api.php';
-const nominatimBase = 'https://nominatim.openstreetmap.org/search';
+const nominatimSearchBase = 'https://nominatim.openstreetmap.org/search';
+const nominatimReverseBase = 'https://nominatim.openstreetmap.org/reverse';
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -50,25 +50,27 @@ form.addEventListener('submit', async (event) => {
 
   try {
     const [originGeo, destinationGeo] = await Promise.all([geocode(origin), geocode(destination)]);
-    const midpoint = {
-      lat: (originGeo.lat + destinationGeo.lat) / 2,
-      lon: (originGeo.lon + destinationGeo.lon) / 2,
-    };
 
     const extraMinutes = availableMinutes - directMinutes;
     const scenicBudget = Math.floor(extraMinutes * (0.35 + scenicness / 200));
-    const targetPoiCount = Math.max(1, Math.min(8, Math.round((poiDensity / 20) * (extraMinutes / 45))));
+    const targetPoiCount = Math.max(1, Math.min(8, Math.round((poiDensity / 100) * 8)));
+    const avgStop = Math.round(8 + (stopTime / 100) * 52);
 
-    const scenicPois = await fetchScenicPois(midpoint, scenicness, targetPoiCount);
-    const filteredPois = scenicPois.filter((_, index) => {
+    const offRouteCandidates = await buildScenicCandidates({
+      originGeo,
+      destinationGeo,
+      scenicness,
+      targetPoiCount,
+    });
+
+    const filtered = offRouteCandidates.filter((_, index) => {
       if (!includeQuickPass && index % 2 === 0) return false;
       if (!includeStops && index % 2 === 1) return false;
       return true;
     });
 
-    const avgStop = Math.round(8 + (stopTime / 100) * 52);
-    const usableStops = Math.min(filteredPois.length, Math.max(0, Math.floor(scenicBudget / avgStop)));
-    const selected = filteredPois.slice(0, Math.max(1, usableStops));
+    const usableStops = Math.max(1, Math.min(filtered.length, Math.floor((scenicBudget || 1) / avgStop) + 1));
+    const selected = filtered.slice(0, usableStops);
 
     renderPlan({
       origin,
@@ -84,74 +86,171 @@ form.addEventListener('submit', async (event) => {
   }
 });
 
+async function buildScenicCandidates({ originGeo, destinationGeo, scenicness, targetPoiCount }) {
+  const lineDistanceKm = haversineKm(originGeo, destinationGeo);
+  const heading = bearingDegrees(originGeo, destinationGeo);
+  const maxSideDetourKm = Math.min(70, Math.max(8, (scenicness / 100) * lineDistanceKm * 0.9));
+  const minSideDetourKm = Math.max(5, maxSideDetourKm * 0.4);
+
+  const samples = [];
+  for (let i = 1; i <= targetPoiCount + 2; i += 1) {
+    const progress = i / (targetPoiCount + 3);
+    const base = interpolate(originGeo, destinationGeo, progress);
+    const side = i % 2 === 0 ? 90 : -90;
+    const diagonal = i % 3 === 0 ? 35 : 0;
+    const distKm = minSideDetourKm + ((maxSideDetourKm - minSideDetourKm) * i) / (targetPoiCount + 2);
+    const point = offsetPoint(base, heading + side + diagonal, distKm);
+    samples.push(point);
+  }
+
+  const resolved = await Promise.all(samples.map((pt) => reverseGeocode(pt)));
+  const unique = dedupeByName(
+    resolved
+      .filter(Boolean)
+      .filter((item) => item.name && item.name.toLowerCase() !== 'unknown'),
+  );
+
+  if (!unique.length) {
+    return [
+      { title: 'Scenic detour viewpoint', lat: originGeo.lat, lon: originGeo.lon },
+      { title: 'Historic downtown district', lat: destinationGeo.lat, lon: destinationGeo.lon },
+    ];
+  }
+
+  return unique.slice(0, targetPoiCount).map((item) => ({
+    title: item.name,
+    lat: item.lat,
+    lon: item.lon,
+  }));
+}
+
 function renderPlan({ origin, destination, availableMinutes, directMinutes, extraMinutes, avgStop, selected }) {
-  timingSummary.textContent = `You have ${availableMinutes} min total. Direct drive is ~${directMinutes} min, leaving ~${extraMinutes} min for scenic detours. Planned ${selected.length} scenic points (~${avgStop} min per stop preference).`;
+  timingSummary.textContent = `You have ${availableMinutes} min total. Direct drive is ~${directMinutes} min, leaving ~${extraMinutes} min for scenic detours. Route now intentionally bends off the direct corridor through ${selected.length} scenic locations (~${avgStop} min stop preference).`;
 
   poiList.innerHTML = '';
   selected.forEach((poi, i) => {
     const li = document.createElement('li');
-    const kind = i % 2 === 0 ? 'Drive-through point' : 'Visit stop';
+    const kind = i % 2 === 0 ? 'Drive-through scenic city/area' : 'Visit stop';
     li.textContent = `${poi.title} (${kind})`;
     poiList.appendChild(li);
   });
 
-  const waypointString = selected.map((x) => x.title).join('|');
+  const waypointString = selected.map((x) => `${x.lat},${x.lon}`).join('|');
   openGoogle.href =
     `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}` +
     `&destination=${encodeURIComponent(destination)}&travelmode=driving` +
     (waypointString ? `&waypoints=${encodeURIComponent(waypointString)}` : '');
 
-  const appleStops = [destination, ...selected.map((x) => x.title)].join(' to:');
-  openApple.href = `https://maps.apple.com/?saddr=${encodeURIComponent(origin)}&daddr=${encodeURIComponent(appleStops)}&dirflg=d`;
+  const appleStops = [...selected.map((x) => `${x.lat},${x.lon}`), destination].join(' to:');
+  openApple.href =
+    `https://maps.apple.com/?saddr=${encodeURIComponent(origin)}` +
+    `&daddr=${encodeURIComponent(appleStops)}&dirflg=d`;
 
   results.hidden = false;
 }
 
 async function geocode(query) {
-  const url = `${nominatimBase}?q=${encodeURIComponent(query)}&format=json&limit=1`;
+  const url = `${nominatimSearchBase}?q=${encodeURIComponent(query)}&format=json&limit=1`;
   const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-    },
+    headers: { Accept: 'application/json' },
   });
 
-  if (!response.ok) {
-    throw new Error('Could not geocode locations.');
-  }
+  if (!response.ok) throw new Error('Could not geocode locations.');
 
   const rows = await response.json();
-  if (!rows.length) {
-    throw new Error(`No map match found for "${query}".`);
-  }
+  if (!rows.length) throw new Error(`No map match found for "${query}".`);
 
   return { lat: Number(rows[0].lat), lon: Number(rows[0].lon) };
 }
 
-async function fetchScenicPois(midpoint, scenicness, limit) {
-  const radius = Math.round(4000 + scenicness * 90);
-  const params = new URLSearchParams({
-    action: 'query',
-    list: 'geosearch',
-    gscoord: `${midpoint.lat}|${midpoint.lon}`,
-    gsradius: String(radius),
-    gslimit: String(Math.max(limit * 2, 8)),
-    format: 'json',
-    origin: '*',
+async function reverseGeocode(point) {
+  const url =
+    `${nominatimReverseBase}?lat=${encodeURIComponent(point.lat)}` +
+    `&lon=${encodeURIComponent(point.lon)}&format=json&zoom=10&addressdetails=1`;
+
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
   });
 
-  const response = await fetch(`${wikiBase}?${params}`);
-  if (!response.ok) {
-    throw new Error('Could not fetch scenic points.');
-  }
+  if (!response.ok) return null;
 
   const json = await response.json();
-  const items = (json.query?.geosearch || []).filter((row) => row.title && row.dist);
+  const a = json.address || {};
+  const name = a.city || a.town || a.village || a.county || a.state_district || json.name || json.display_name;
 
-  if (!items.length) {
-    return [{ title: 'Local scenic byway' }, { title: 'Historic district' }];
-  }
+  if (!name) return null;
 
-  return items.slice(0, limit + 2).map((row) => ({ title: row.title }));
+  return {
+    name,
+    lat: Number(point.lat),
+    lon: Number(point.lon),
+  };
+}
+
+function interpolate(a, b, t) {
+  return {
+    lat: a.lat + (b.lat - a.lat) * t,
+    lon: a.lon + (b.lon - a.lon) * t,
+  };
+}
+
+function offsetPoint(origin, bearingDeg, distanceKm) {
+  const R = 6371;
+  const brng = toRad(bearingDeg);
+  const dByR = distanceKm / R;
+  const lat1 = toRad(origin.lat);
+  const lon1 = toRad(origin.lon);
+
+  const lat2 = Math.asin(
+    Math.sin(lat1) * Math.cos(dByR) + Math.cos(lat1) * Math.sin(dByR) * Math.cos(brng),
+  );
+  const lon2 =
+    lon1 +
+    Math.atan2(
+      Math.sin(brng) * Math.sin(dByR) * Math.cos(lat1),
+      Math.cos(dByR) - Math.sin(lat1) * Math.sin(lat2),
+    );
+
+  return { lat: toDeg(lat2), lon: toDeg(lon2) };
+}
+
+function bearingDegrees(a, b) {
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function haversineKm(a, b) {
+  const R = 6371;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function dedupeByName(list) {
+  const seen = new Set();
+  return list.filter((item) => {
+    const key = item.name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function toRad(deg) {
+  return (deg * Math.PI) / 180;
+}
+
+function toDeg(rad) {
+  return (rad * 180) / Math.PI;
 }
 
 function showStatus(message) {

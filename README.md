@@ -6,13 +6,13 @@ ScenicView is a lightweight hosted-web-app-ready route planner for people who wa
 
 - Enter origin, destination, arrival time, and direct-drive estimate.
 - Tune settings for:
-  - **Scenicness** (higher = farther scenic search radius)
+  - **Scenicness** (higher = larger off-route detours)
   - **Stop time preference** (short pass-throughs vs longer stops)
   - **POI density** (fewer vs more points of interest)
 - Includes toggles for:
   - Drive-through scenic points
   - Visit-worthy stops
-- Uses free geocoding + nearby-interest lookup to build candidate scenic points.
+- Uses free geocoding + reverse geocoding to intentionally generate off-corridor scenic detours through nearby cities/areas, not just direct-route points.
 - Exports routes to:
   - **Google Maps** (multi-waypoint directions)
   - **Apple Maps** (works well for iPhone users)
