@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ScenicView Planner</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>ScenicView Planner</h1>
+        <p>
+          Build a scenic drive that still gets you there on time. Tune scenicness,
+          stop duration, and POI count, then export to Apple Maps or Google Maps.
+        </p>
+      </header>
+
+      <section class="card">
+        <h2>Trip details</h2>
+        <form id="planner-form">
+          <div class="grid two">
+            <label>
+              Starting point
+              <input id="origin" name="origin" placeholder="San Jose, CA" required />
+            </label>
+            <label>
+              Destination
+              <input
+                id="destination"
+                name="destination"
+                placeholder="Monterey, CA"
+                required
+              />
+            </label>
+          </div>
+
+          <div class="grid three">
+            <label>
+              Arrive by
+              <input id="arriveBy" name="arriveBy" type="datetime-local" required />
+            </label>
+            <label>
+              Depart at (optional)
+              <input id="departAt" name="departAt" type="datetime-local" />
+            </label>
+            <label>
+              Direct drive estimate (min)
+              <input
+                id="directMinutes"
+                name="directMinutes"
+                type="number"
+                min="1"
+                step="1"
+                placeholder="90"
+                required
+              />
+            </label>
+          </div>
+
+          <h3>Scenic settings</h3>
+          <div class="grid three">
+            <label>
+              Scenicness
+              <input id="scenicness" name="scenicness" type="range" min="0" max="100" value="70" />
+              <span id="scenicnessValue">70</span>
+            </label>
+            <label>
+              Stop time preference
+              <input id="stopTime" name="stopTime" type="range" min="0" max="100" value="55" />
+              <span id="stopTimeValue">55</span>
+            </label>
+            <label>
+              POI density
+              <input id="poiDensity" name="poiDensity" type="range" min="0" max="100" value="65" />
+              <span id="poiDensityValue">65</span>
+            </label>
+          </div>
+
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="includeQuickPass" checked /> Include drive-through scenic points</label>
+            <label><input type="checkbox" id="includeStops" checked /> Include visit-worthy stops</label>
+          </div>
+
+          <button type="submit">Build scenic route</button>
+        </form>
+      </section>
+
+      <section class="card" id="results" hidden>
+        <h2>Suggested route</h2>
+        <p id="timingSummary"></p>
+        <ul id="poiList"></ul>
+        <div class="actions">
+          <a id="openGoogle" target="_blank" rel="noreferrer">Open in Google Maps</a>
+          <a id="openApple" target="_blank" rel="noreferrer">Open in Apple Maps</a>
+        </div>
+      </section>
+
+      <section class="card" id="status" hidden></section>
+    </main>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
