@@ -11,9 +11,8 @@
       <header>
         <h1>ScenicView Planner</h1>
         <p>
-          Plan a scenic trip between a required departure and arrival time. ScenicView
-          estimates direct drive time automatically, then spends your remaining time on
-          meaningful scenic stops and places.
+          Plan scenic one-way or round trips with required timing across continental
+          North America (Canada, U.S., Mexico mainland).
         </p>
       </header>
 
@@ -37,8 +36,19 @@
               <input id="departAt" name="departAt" type="datetime-local" required />
             </label>
             <label>
-              Arrive by
+              Arrive at destination by
               <input id="arriveBy" name="arriveBy" type="datetime-local" required />
+            </label>
+          </div>
+
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="roundTrip" /> Plan round trip back home</label>
+          </div>
+
+          <div class="grid one" id="roundTripFields" hidden>
+            <label>
+              Arrive back home by
+              <input id="returnArriveBy" name="returnArriveBy" type="datetime-local" />
             </label>
           </div>
 
@@ -54,7 +64,7 @@
               <input id="stopTime" name="stopTime" type="number" min="0" max="180" value="30" required />
             </label>
             <label>
-              Preferred stops (1-100)
+              Preferred stops (1-100, planner max 10)
               <input id="preferredStops" name="preferredStops" type="number" min="1" max="100" value="8" required />
             </label>
           </div>
