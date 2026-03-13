@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ScenicView Planner</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>ScenicView Planner</h1>
+        <p>
+          Plan scenic one-way or round trips with required timing across continental
+          North America (Canada, U.S., Mexico mainland).
+        </p>
+      </header>
+
+      <section class="card" id="loadingCard" hidden>
+        <h2>Building your scenic route…</h2>
+        <progress id="loadingBar" max="100" value="0"></progress>
+        <p id="loadingText">Starting...</p>
+      </section>
+
+      <section class="card">
+        <h2>Trip details</h2>
+        <form id="planner-form">
+          <div class="grid two">
+            <label>
+              Starting point
+              <input id="origin" name="origin" placeholder="San Jose, CA" required />
+            </label>
+            <label>
+              Destination
+              <input id="destination" name="destination" placeholder="Monterey, CA" required />
+            </label>
+          </div>
+
+          <div class="grid two">
+            <label>
+              Depart at
+              <input id="departAt" name="departAt" type="datetime-local" required />
+            </label>
+            <label>
+              Arrive at destination by
+              <input id="arriveBy" name="arriveBy" type="datetime-local" required />
+            </label>
+          </div>
+
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="roundTrip" /> Plan round trip back home</label>
+          </div>
+
+          <div class="grid one" id="roundTripFields" hidden>
+            <label>
+              Arrive back home by
+              <input id="returnArriveBy" name="returnArriveBy" type="datetime-local" />
+            </label>
+          </div>
+
+          <h3>Scenic settings</h3>
+          <div class="grid three">
+            <label>
+              Scenicness
+              <input id="scenicness" name="scenicness" type="range" min="0" max="100" value="75" />
+              <span id="scenicnessValue">75</span>
+            </label>
+            <label>
+              Stop time preference (minutes)
+              <input id="stopTime" name="stopTime" type="number" min="0" max="180" value="30" required />
+            </label>
+            <label>
+              Preferred stops (1-100, planner max 10)
+              <input id="preferredStops" name="preferredStops" type="number" min="1" max="100" value="8" required />
+            </label>
+          </div>
+
+          <div class="checkbox-row">
+            <label><input type="checkbox" id="includeDriveThrough" checked /> Include drive-through highlights</label>
+            <label><input type="checkbox" id="includeVisitStops" checked /> Include visit-worthy stops</label>
+            <label><input type="checkbox" id="includeFood" checked /> Include restaurants & food spots</label>
+            <label><input type="checkbox" id="includeParks" checked /> Include parks & recreation areas</label>
+          </div>
+
+          <button id="buildBtn" type="submit">Build scenic route</button>
+        </form>
+      </section>
+
+      <section class="card" id="results" hidden>
+        <h2>Suggested route</h2>
+        <p id="timingSummary"></p>
+        <ul id="poiList"></ul>
+        <div class="actions">
+          <a id="openGoogle" target="_blank" rel="noreferrer">Open in Google Maps</a>
+          <a id="openApple" target="_blank" rel="noreferrer">Open in Apple Maps</a>
+        </div>
+      </section>
+
+      <section class="card" id="status" hidden></section>
+    </main>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
