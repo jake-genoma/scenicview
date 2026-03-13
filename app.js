@@ -10,14 +10,17 @@ const loadingCard = document.getElementById('loadingCard');
 const loadingBar = document.getElementById('loadingBar');
 const loadingText = document.getElementById('loadingText');
 
-const scenicnessEl = document.getElementById('scenicness');
-const scenicnessValueEl = document.getElementById('scenicnessValue');
+const prioritySliderIds = ['priorityScenic', 'priorityThings', 'priorityFood'];
+prioritySliderIds.forEach((id) => {
+  const el = document.getElementById(id);
+  const out = document.getElementById(`${id}Value`);
+  out.textContent = el.value;
+  el.addEventListener('input', () => (out.textContent = el.value));
+});
+
 const roundTripEl = document.getElementById('roundTrip');
 const roundTripFieldsEl = document.getElementById('roundTripFields');
 const returnArriveByEl = document.getElementById('returnArriveBy');
-
-scenicnessValueEl.textContent = scenicnessEl.value;
-scenicnessEl.addEventListener('input', () => (scenicnessValueEl.textContent = scenicnessEl.value));
 roundTripEl.addEventListener('change', () => {
   roundTripFieldsEl.hidden = !roundTripEl.checked;
   returnArriveByEl.required = roundTripEl.checked;
@@ -94,7 +97,11 @@ form.addEventListener('submit', async (event) => {
   const arriveBy = new Date(data.get('arriveBy').toString());
   const isRoundTrip = roundTripEl.checked;
   const returnArriveBy = isRoundTrip ? new Date(data.get('returnArriveBy').toString()) : null;
-  const scenicness = clamp(Number(data.get('scenicness')), 0, 100);
+  const priorities = {
+    scenic: clamp(Number(data.get('priorityScenic')), 0, 100),
+    thingsToDo: clamp(Number(data.get('priorityThings')), 0, 100),
+    food: clamp(Number(data.get('priorityFood')), 0, 100),
+  };
   const stopTime = clamp(Number(data.get('stopTime')), 0, 180);
   const preferredStops = clamp(Number(data.get('preferredStops')), 1, 100);
   const includeDriveThrough = document.getElementById('includeDriveThrough').checked;
@@ -138,7 +145,7 @@ form.addEventListener('submit', async (event) => {
     const outboundStopTarget = isRoundTrip ? Math.max(1, Math.ceil(cappedStops / 2)) : cappedStops;
     const returnStopTarget = isRoundTrip ? Math.max(1, Math.floor(cappedStops / 2)) : 0;
 
-    const options = { scenicness, includeFood, includeParks, includeDriveThrough, includeVisitStops, stopTime };
+    const options = { priorities, includeFood, includeParks, includeDriveThrough, includeVisitStops, stopTime };
 
     setLoading(true, 40, 'Searching outbound POIs...');
     const outboundSelected = await planLeg({
@@ -214,13 +221,13 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
   const candidatePool = await buildPoiPool({
     originGeo: startGeo,
     destinationGeo: endGeo,
-    scenicness: options.scenicness,
+    scenicness: options.priorities.scenic,
     includeFood: options.includeFood,
     includeParks: options.includeParks,
   });
 
   const filtered = applyTypeFilters(candidatePool, options);
-  const ranked = rankCandidates(filtered, options.scenicness);
+  const ranked = rankCandidates(filtered, options.priorities);
 
   const sleepMinutes = estimateSleepMinutes(availableMinutes);
   const effectiveAvailable = Math.max(0, availableMinutes - sleepMinutes);
@@ -353,9 +360,9 @@ function applyTypeFilters(candidates, options) {
   });
 }
 
-function rankCandidates(candidates, scenicness) {
+function rankCandidates(candidates, priorities) {
   return [...candidates]
-    .map((poi) => ({ ...poi, score: scorePoi(poi, scenicness) }))
+    .map((poi) => ({ ...poi, score: scorePoi(poi, priorities) }))
     .sort((a, b) => b.score - a.score);
 }
 
@@ -390,30 +397,66 @@ function estimateSleepMinutes(windowMinutes) {
   return fullDays * nightly;
 }
 
-function scorePoi(poi, scenicness) {
+function scorePoi(poi, priorities) {
   const sourceWeight = poi.source === 'overpass' ? 1.8 : poi.source === 'wikipedia' ? 1.3 : 0.75;
-  const scenicBoost = {
-    viewpoint: 1 + scenicness / 55,
-    park: 1 + scenicness / 70,
-    campground: 1 + scenicness / 60,
-    natural: 1 + scenicness / 85,
-    landmark: 1 + scenicness / 120,
-    historic: 1 + scenicness / 130,
-    city: 1,
-    food: restaurantQualityScore(poi, scenicness),
-  }[poi.type] || 1;
+  const weights = normalizedPriorityWeights(priorities);
 
-  const chainPenalty = isChainRestaurant(poi) ? (scenicness > 60 ? 0.6 : 1.05) : scenicness > 60 ? 1.15 : 1;
-  return sourceWeight * scenicBoost * chainPenalty;
+  const scenicQuality = scenicQualityScore(poi);
+  const thingsQuality = thingsToDoQualityScore(poi);
+  const foodQuality = restaurantQualityScore(poi, priorities.food);
+
+  const blended =
+    weights.scenic * scenicQuality +
+    weights.thingsToDo * thingsQuality +
+    weights.food * foodQuality;
+
+  return sourceWeight * blended;
 }
 
-function restaurantQualityScore(poi, scenicness) {
-  if (poi.type !== 'food') return 1;
+function normalizedPriorityWeights(priorities) {
+  const scenic = Math.max(0, priorities.scenic);
+  const thingsToDo = Math.max(0, priorities.thingsToDo);
+  const food = Math.max(0, priorities.food);
+  const total = scenic + thingsToDo + food;
+  if (total === 0) return { scenic: 1 / 3, thingsToDo: 1 / 3, food: 1 / 3 };
+  return { scenic: scenic / total, thingsToDo: thingsToDo / total, food: food / total };
+}
+
+function scenicQualityScore(poi) {
+  const byType = {
+    viewpoint: 1.9,
+    park: 1.8,
+    campground: 1.7,
+    natural: 1.65,
+    landmark: 1.3,
+    historic: 1.2,
+    city: 1.05,
+    food: 0.9,
+  };
+  return byType[poi.type] || 1;
+}
+
+function thingsToDoQualityScore(poi) {
+  const byType = {
+    city: 1.75,
+    historic: 1.65,
+    landmark: 1.6,
+    park: 1.35,
+    campground: 1.25,
+    natural: 1.2,
+    viewpoint: 1.05,
+    food: 1.15,
+  };
+  return byType[poi.type] || 1;
+}
+
+function restaurantQualityScore(poi, foodPriority) {
+  if (poi.type !== 'food') return 0.85;
   const tags = poi.tags || {};
   const hasCuisine = tags.cuisine ? 1.1 : 1;
   const scenicFood = /seafood|regional|local|farm|coast|mountain|view|river/i.test(`${tags.cuisine || ''} ${poi.name}`) ? 1.22 : 0.92;
-  const quickFood = isChainRestaurant(poi) ? 1.18 : 0.95;
-  return hasCuisine * (scenicness >= 50 ? scenicFood : quickFood);
+  const chainPenalty = isChainRestaurant(poi) ? (foodPriority > 60 ? 0.72 : 0.95) : 1.15;
+  return hasCuisine * scenicFood * chainPenalty + 0.1;
 }
 
 function classifyVisitStyle(type) {

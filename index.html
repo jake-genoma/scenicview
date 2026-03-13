@@ -58,19 +58,32 @@
             </label>
           </div>
 
-          <h3>Scenic settings</h3>
+          <h3>Stop priority settings</h3>
           <div class="grid three">
             <label>
-              Scenicness
-              <input id="scenicness" name="scenicness" type="range" min="0" max="100" value="75" />
-              <span id="scenicnessValue">75</span>
+              Scenicness priority
+              <input id="priorityScenic" name="priorityScenic" type="range" min="0" max="100" value="70" />
+              <span id="priorityScenicValue">70</span>
             </label>
+            <label>
+              Things to Do priority
+              <input id="priorityThings" name="priorityThings" type="range" min="0" max="100" value="65" />
+              <span id="priorityThingsValue">65</span>
+            </label>
+            <label>
+              Food priority
+              <input id="priorityFood" name="priorityFood" type="range" min="0" max="100" value="50" />
+              <span id="priorityFoodValue">50</span>
+            </label>
+          </div>
+
+          <div class="grid two">
             <label>
               Stop time preference (minutes)
               <input id="stopTime" name="stopTime" type="number" min="0" max="180" value="30" required />
             </label>
             <label>
-              Preferred stops (1-100, 10 max for apps)
+              Preferred stops (1-100, planner max 10)
               <input id="preferredStops" name="preferredStops" type="number" min="1" max="100" value="8" required />
             </label>
           </div>

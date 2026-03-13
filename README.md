@@ -8,7 +8,9 @@ ScenicView is a lightweight hosted-web-app-ready route planner for people who wa
 - Optional round trip mode adds a required return-home arrival time (for example: arrive at destination in 1 day, return home over the next 2 days).
 - ScenicView automatically estimates direct drive time (no manual direct-drive input needed).
 - Tune settings for:
-  - **Scenicness** (more scenic emphasis)
+  - **Scenicness priority** (0-100)
+  - **Things to Do priority** (0-100)
+  - **Food priority** (0-100)
   - **Stop time preference** (0-180 min per stop)
   - **Preferred stops** (1-100 input, capped to 10 exported stops due to Apple/Google Maps waypoint limits)
 - Optional include filters for:
