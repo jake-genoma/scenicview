@@ -104,10 +104,6 @@ form.addEventListener('submit', async (event) => {
   };
   const stopTime = clamp(Number(data.get('stopTime')), 0, 180);
   const preferredStops = clamp(Number(data.get('preferredStops')), 1, 100);
-  const includeDriveThrough = document.getElementById('includeDriveThrough').checked;
-  const includeVisitStops = document.getElementById('includeVisitStops').checked;
-  const includeFood = document.getElementById('includeFood').checked;
-  const includeParks = document.getElementById('includeParks').checked;
 
   if (!origin || !destination || Number.isNaN(departAt.getTime()) || Number.isNaN(arriveBy.getTime())) {
     setLoading(false);
@@ -145,7 +141,7 @@ form.addEventListener('submit', async (event) => {
     const outboundStopTarget = isRoundTrip ? Math.max(1, Math.ceil(cappedStops / 2)) : cappedStops;
     const returnStopTarget = isRoundTrip ? Math.max(1, Math.floor(cappedStops / 2)) : 0;
 
-    const options = { priorities, includeFood, includeParks, includeDriveThrough, includeVisitStops, stopTime };
+    const options = { priorities, stopTime };
 
     setLoading(true, 40, 'Searching outbound POIs...');
     const outboundSelected = await planLeg({
@@ -222,12 +218,11 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
     originGeo: startGeo,
     destinationGeo: endGeo,
     scenicness: options.priorities.scenic,
-    includeFood: options.includeFood,
-    includeParks: options.includeParks,
+    includeFood: true,
+    includeParks: true,
   });
 
-  const filtered = applyTypeFilters(candidatePool, options);
-  const ranked = rankCandidates(filtered, options.priorities);
+  const ranked = rankCandidates(candidatePool, options.priorities);
 
   const sleepMinutes = estimateSleepMinutes(availableMinutes);
   const effectiveAvailable = Math.max(0, availableMinutes - sleepMinutes);
@@ -354,17 +349,6 @@ async function fetchWikipediaPois(center, radius) {
     source: 'wikipedia',
     tags: {},
   }));
-}
-
-function applyTypeFilters(candidates, options) {
-  return candidates.filter((poi) => {
-    const visitClass = classifyVisitStyle(poi.type);
-    if (!options.includeDriveThrough && visitClass === 'drive-through') return false;
-    if (!options.includeVisitStops && visitClass === 'visit') return false;
-    if (!options.includeFood && poi.type === 'food') return false;
-    if (!options.includeParks && ['park', 'viewpoint', 'campground'].includes(poi.type)) return false;
-    return true;
-  });
 }
 
 function rankCandidates(candidates, priorities) {
