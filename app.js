@@ -239,6 +239,7 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
     availableMinutes: effectiveAvailable,
     stopTime: options.stopTime,
     preferredCapped: Math.min(preferredStops, MAX_STOPS),
+    priorities: options.priorities,
   });
 
   return selected.map((x) => ({ ...x, leg: legLabel }));
@@ -296,10 +297,16 @@ async function fetchOverpassPois(center, radius, { includeFood, includeParks }) 
 
   const query = `[out:json][timeout:20];(${parksQuery}${foodQuery}
       nwr(around:${radius},${center.lat},${center.lon})[tourism=attraction];
+      nwr(around:${radius},${center.lat},${center.lon})[tourism=museum];
+      nwr(around:${radius},${center.lat},${center.lon})[tourism=gallery];
+      nwr(around:${radius},${center.lat},${center.lon})[tourism=zoo];
+      nwr(around:${radius},${center.lat},${center.lon})[tourism=theme_park];
+      nwr(around:${radius},${center.lat},${center.lon})[amenity=theatre];
+      nwr(around:${radius},${center.lat},${center.lon})[amenity=arts_centre];
       nwr(around:${radius},${center.lat},${center.lon})[historic];
       nwr(around:${radius},${center.lat},${center.lon})[natural];
       nwr(around:${radius},${center.lat},${center.lon})[place~"city|town|village"];
-    ); out center 180;`;
+    ); out center 220;`;
 
   const response = await fetchWithRetry(overpassBase, {
     method: 'POST',
@@ -366,10 +373,21 @@ function rankCandidates(candidates, priorities) {
     .sort((a, b) => b.score - a.score);
 }
 
-async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availableMinutes, stopTime, preferredCapped }) {
+async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availableMinutes, stopTime, preferredCapped, priorities }) {
   const selected = [];
+  const weights = normalizedPriorityWeights(priorities);
+  const desiredMix = desiredBucketCounts(preferredCapped, weights);
+
   for (const candidate of ranked) {
     if (selected.length >= preferredCapped || selected.length >= MAX_STOPS) break;
+
+    const candidateBucket = priorityBucket(candidate);
+    const currentMix = countSelectedBuckets(selected);
+    const needsBucket = currentMix[candidateBucket] < desiredMix[candidateBucket];
+
+    if (!needsBucket && selected.length < Math.max(2, Math.floor(preferredCapped * 0.6))) {
+      continue;
+    }
 
     const estimatedStopMinutes = estimateStopDuration(candidate.type, stopTime, candidate.minStayMinutes);
     const tentative = [...selected, { ...candidate, estimatedStopMinutes }];
@@ -380,7 +398,63 @@ async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availabl
       selected.push({ ...candidate, estimatedStopMinutes });
     }
   }
+
+  if (selected.length < preferredCapped) {
+    for (const candidate of ranked) {
+      if (selected.length >= preferredCapped || selected.length >= MAX_STOPS) break;
+      if (selected.some((s) => s.name === candidate.name && Math.abs(s.lat - candidate.lat) < 0.001 && Math.abs(s.lon - candidate.lon) < 0.001)) continue;
+
+      const estimatedStopMinutes = estimateStopDuration(candidate.type, stopTime, candidate.minStayMinutes);
+      const tentative = [...selected, { ...candidate, estimatedStopMinutes }];
+      const driveMinutes = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, tentative);
+      const stopMinutes = tentative.reduce((sum, p) => sum + p.estimatedStopMinutes, 0);
+      if (driveMinutes + stopMinutes <= availableMinutes) selected.push({ ...candidate, estimatedStopMinutes });
+    }
+  }
+
   return selected;
+}
+
+function desiredBucketCounts(stopCount, weights) {
+  const raw = {
+    scenic: weights.scenic * stopCount,
+    things: weights.thingsToDo * stopCount,
+    food: weights.food * stopCount,
+  };
+  const out = {
+    scenic: Math.floor(raw.scenic),
+    things: Math.floor(raw.things),
+    food: Math.floor(raw.food),
+  };
+
+  let used = out.scenic + out.things + out.food;
+  const order = [
+    ['scenic', raw.scenic - out.scenic],
+    ['things', raw.things - out.things],
+    ['food', raw.food - out.food],
+  ].sort((a, b) => b[1] - a[1]);
+
+  let i = 0;
+  while (used < stopCount) {
+    out[order[i % order.length][0]] += 1;
+    used += 1;
+    i += 1;
+  }
+
+  return out;
+}
+
+function priorityBucket(poi) {
+  if (poi.type === 'food') return 'food';
+  if (['museum', 'historic', 'activity', 'city', 'landmark'].includes(poi.type)) return 'things';
+  return 'scenic';
+}
+
+function countSelectedBuckets(selected) {
+  return selected.reduce((acc, poi) => {
+    acc[priorityBucket(poi)] += 1;
+    return acc;
+  }, { scenic: 0, things: 0, food: 0 });
 }
 
 function estimateStopDuration(type, userPreferenceMinutes, minStayMinutes) {
@@ -414,49 +488,62 @@ function scorePoi(poi, priorities) {
 }
 
 function normalizedPriorityWeights(priorities) {
-  const scenic = Math.max(0, priorities.scenic);
-  const thingsToDo = Math.max(0, priorities.thingsToDo);
-  const food = Math.max(0, priorities.food);
-  const total = scenic + thingsToDo + food;
+  const scenic = Math.pow(Math.max(0, priorities.scenic) / 100, 1.45);
+  const thingsToDo = Math.pow(Math.max(0, priorities.thingsToDo) / 100, 1.45);
+  const food = Math.pow(Math.max(0, priorities.food) / 100, 1.45);
+  const base = { scenic, thingsToDo, food };
+  const total = base.scenic + base.thingsToDo + base.food;
   if (total === 0) return { scenic: 1 / 3, thingsToDo: 1 / 3, food: 1 / 3 };
-  return { scenic: scenic / total, thingsToDo: thingsToDo / total, food: food / total };
+  return {
+    scenic: base.scenic / total,
+    thingsToDo: base.thingsToDo / total,
+    food: base.food / total,
+  };
 }
 
 function scenicQualityScore(poi) {
   const byType = {
-    viewpoint: 1.9,
-    park: 1.8,
-    campground: 1.7,
-    natural: 1.65,
-    landmark: 1.3,
-    historic: 1.2,
-    city: 1.05,
-    food: 0.9,
+    viewpoint: 2.0,
+    park: 1.9,
+    campground: 1.75,
+    natural: 1.7,
+    landmark: 1.25,
+    historic: 1.15,
+    museum: 0.95,
+    activity: 0.95,
+    city: 1.0,
+    food: 0.75,
   };
   return byType[poi.type] || 1;
 }
 
 function thingsToDoQualityScore(poi) {
   const byType = {
-    city: 1.75,
-    historic: 1.65,
-    landmark: 1.6,
-    park: 1.35,
-    campground: 1.25,
+    museum: 2.05,
+    historic: 1.9,
+    activity: 1.85,
+    landmark: 1.7,
+    city: 1.55,
+    park: 1.3,
+    campground: 1.2,
     natural: 1.2,
-    viewpoint: 1.05,
-    food: 1.15,
+    viewpoint: 1.0,
+    food: 1.05,
   };
   return byType[poi.type] || 1;
 }
 
 function restaurantQualityScore(poi, foodPriority) {
-  if (poi.type !== 'food') return 0.85;
+  if (poi.type !== 'food') {
+    return foodPriority >= 70 ? 0.55 : 0.9;
+  }
+
   const tags = poi.tags || {};
-  const hasCuisine = tags.cuisine ? 1.1 : 1;
-  const scenicFood = /seafood|regional|local|farm|coast|mountain|view|river/i.test(`${tags.cuisine || ''} ${poi.name}`) ? 1.22 : 0.92;
-  const chainPenalty = isChainRestaurant(poi) ? (foodPriority > 60 ? 0.72 : 0.95) : 1.15;
-  return hasCuisine * scenicFood * chainPenalty + 0.1;
+  const hasCuisine = tags.cuisine ? 1.14 : 1;
+  const tripFoodSignal = /seafood|regional|local|farm|coast|mountain|view|river|bbq|taqueria|bistro|diner/i.test(`${tags.cuisine || ''} ${poi.name}`) ? 1.22 : 0.96;
+  const chainPenalty = isChainRestaurant(poi) ? (foodPriority > 60 ? 0.68 : 0.9) : 1.18;
+  const sitDownSignal = /restaurant|grill|kitchen|bistro|cantina|cafe/i.test(`${tags.amenity || ''} ${poi.name}`) ? 1.06 : 1;
+  return hasCuisine * tripFoodSignal * chainPenalty * sitDownSignal;
 }
 
 function classifyVisitStyle(type) {
@@ -478,6 +565,8 @@ function buildDescription(poi, reverse) {
     campground: 'Campground-style stop suitable for longer overnights.',
     food: 'Restaurant stop selected to fit your scenic preference level.',
     city: 'Town/city area with local character and services.',
+    museum: 'Museum stop with curated exhibits and local culture.',
+    activity: 'Activity-focused stop (gallery, theater, zoo, or attraction).',
     historic: 'Historic location with local context and attractions.',
     natural: 'Natural feature stop with outdoors appeal.',
     landmark: 'Notable attraction that adds variety to the route.',
@@ -597,6 +686,8 @@ async function fetchWithRetry(url, init, maxAttempts = 3) {
 function classifyPoi(tags) {
   if (tags.amenity === 'restaurant' || tags.cuisine) return 'food';
   if (tags.tourism === 'camp_site') return 'campground';
+  if (tags.tourism === 'museum') return 'museum';
+  if (tags.tourism === 'gallery' || tags.amenity === 'arts_centre' || tags.amenity === 'theatre' || tags.tourism === 'zoo' || tags.tourism === 'theme_park') return 'activity';
   if (tags.leisure === 'park' || tags.boundary === 'national_park' || tags.boundary === 'protected_area') return 'park';
   if (tags.tourism === 'viewpoint') return 'viewpoint';
   if (tags.place === 'city' || tags.place === 'town' || tags.place === 'village') return 'city';
