@@ -16,6 +16,12 @@
         </p>
       </header>
 
+      <section class="card" id="loadingCard" hidden>
+        <h2>Building your scenic route…</h2>
+        <progress id="loadingBar" max="100" value="0"></progress>
+        <p id="loadingText">Starting...</p>
+      </section>
+
       <section class="card">
         <h2>Trip details</h2>
         <form id="planner-form">
@@ -64,7 +70,7 @@
               <input id="stopTime" name="stopTime" type="number" min="0" max="180" value="30" required />
             </label>
             <label>
-              Preferred stops (1-100, planner max 10)
+              Preferred stops (1-100, 10 max for apps)
               <input id="preferredStops" name="preferredStops" type="number" min="1" max="100" value="8" required />
             </label>
           </div>
@@ -76,7 +82,7 @@
             <label><input type="checkbox" id="includeParks" checked /> Include parks & recreation areas</label>
           </div>
 
-          <button type="submit">Build scenic route</button>
+          <button id="buildBtn" type="submit">Build scenic route</button>
         </form>
       </section>
 

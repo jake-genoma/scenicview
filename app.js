@@ -1,10 +1,14 @@
 const form = document.getElementById('planner-form');
+const buildBtn = document.getElementById('buildBtn');
 const results = document.getElementById('results');
 const statusCard = document.getElementById('status');
 const timingSummary = document.getElementById('timingSummary');
 const poiList = document.getElementById('poiList');
 const openGoogle = document.getElementById('openGoogle');
 const openApple = document.getElementById('openApple');
+const loadingCard = document.getElementById('loadingCard');
+const loadingBar = document.getElementById('loadingBar');
+const loadingText = document.getElementById('loadingText');
 
 const scenicnessEl = document.getElementById('scenicness');
 const scenicnessValueEl = document.getElementById('scenicnessValue');
@@ -26,25 +30,62 @@ const overpassBase = 'https://overpass-api.de/api/interpreter';
 const wikiBase = 'https://en.wikipedia.org/w/api.php';
 const osrmBase = 'https://router.project-osrm.org/route/v1/driving';
 const MAX_STOPS = 10;
+const MULTI_DAY_SLEEP_MIN = 6 * 60;
+const MULTI_DAY_SLEEP_MAX = 9 * 60;
 
-const FALLBACK_POI_CATALOG = [
-  { name: 'Yosemite National Park', lat: 37.8651, lon: -119.5383, type: 'park' },
-  { name: 'Big Sur Coastline Viewpoint', lat: 36.2704, lon: -121.8078, type: 'viewpoint' },
-  { name: 'Point Reyes National Seashore', lat: 38.069, lon: -122.8069, type: 'park' },
-  { name: 'Muir Woods National Monument', lat: 37.8954, lon: -122.578, type: 'park' },
-  { name: 'Acadia National Park', lat: 44.3386, lon: -68.2733, type: 'park' },
-  { name: 'Blue Ridge Parkway Scenic Area', lat: 35.5951, lon: -82.5515, type: 'viewpoint' },
-  { name: 'Local Farm-to-Table Restaurant', lat: 38.5816, lon: -121.4944, type: 'food' },
-  { name: 'Regional State Recreation Area', lat: 34.1367, lon: -118.2942, type: 'park' },
-  { name: 'Mountain Campground', lat: 39.2232, lon: -120.1011, type: 'campground' },
-  { name: 'Banff Town Center', lat: 51.1784, lon: -115.5708, type: 'city' },
+const US_NATIONAL_PARKS = [
+  ['Acadia National Park', 44.3386, -68.2733], ['American Samoa National Park', -14.2583, -170.6833],
+  ['Arches National Park', 38.7331, -109.5925], ['Badlands National Park', 43.8554, -102.3397],
+  ['Big Bend National Park', 29.1275, -103.2425], ['Biscayne National Park', 25.4824, -80.2088],
+  ['Black Canyon of the Gunnison National Park', 38.5754, -107.7416], ['Bryce Canyon National Park', 37.593, -112.1871],
+  ['Canyonlands National Park', 38.3269, -109.8783], ['Capitol Reef National Park', 38.2, -111.167],
+  ['Carlsbad Caverns National Park', 32.1479, -104.5567], ['Channel Islands National Park', 34.01, -119.42],
+  ['Congaree National Park', 33.7914, -80.7821], ['Crater Lake National Park', 42.9446, -122.109],
+  ['Cuyahoga Valley National Park', 41.2808, -81.5678], ['Death Valley National Park', 36.5054, -117.0794],
+  ['Denali National Park', 63.1148, -151.1926], ['Dry Tortugas National Park', 24.6285, -82.8732],
+  ['Everglades National Park', 25.2866, -80.8987], ['Gates of the Arctic National Park', 67.78, -153.3],
+  ['Gateway Arch National Park', 38.6247, -90.1848], ['Glacier National Park', 48.6967, -113.7183],
+  ['Glacier Bay National Park', 58.6658, -136.9002], ['Grand Canyon National Park', 36.1069, -112.1129],
+  ['Grand Teton National Park', 43.7904, -110.6818], ['Great Basin National Park', 38.9833, -114.3],
+  ['Great Sand Dunes National Park', 37.7916, -105.5943], ['Great Smoky Mountains National Park', 35.6118, -83.4895],
+  ['Guadalupe Mountains National Park', 31.923, -104.8858], ['Haleakala National Park', 20.7204, -156.1552],
+  ['Hawaii Volcanoes National Park', 19.4194, -155.2885], ['Hot Springs National Park', 34.521, -93.0424],
+  ['Indiana Dunes National Park', 41.6533, -87.0524], ['Isle Royale National Park', 47.9958, -88.9093],
+  ['Joshua Tree National Park', 33.8734, -115.901], ['Katmai National Park', 58.5, -155.0],
+  ['Kenai Fjords National Park', 59.92, -149.65], ['Kings Canyon National Park', 36.8879, -118.5551],
+  ['Kobuk Valley National Park', 67.55, -159.28], ['Lake Clark National Park', 60.97, -153.42],
+  ['Lassen Volcanic National Park', 40.4977, -121.4207], ['Mammoth Cave National Park', 37.186, -86.101],
+  ['Mesa Verde National Park', 37.2309, -108.4618], ['Mount Rainier National Park', 46.8797, -121.7269],
+  ['New River Gorge National Park', 38.0686, -81.0832], ['North Cascades National Park', 48.7718, -121.2985],
+  ['Olympic National Park', 47.8021, -123.6044], ['Petrified Forest National Park', 34.9099, -109.8068],
+  ['Pinnacles National Park', 36.4864, -121.1825], ['Redwood National Park', 41.2132, -124.0046],
+  ['Rocky Mountain National Park', 40.3428, -105.6836], ['Saguaro National Park', 32.2967, -111.1666],
+  ['Sequoia National Park', 36.4864, -118.5658], ['Shenandoah National Park', 38.53, -78.35],
+  ['Theodore Roosevelt National Park', 46.979, -103.5387], ['Virgin Islands National Park', 18.3428, -64.7412],
+  ['Voyageurs National Park', 48.4839, -92.838], ['White Sands National Park', 32.7872, -106.3257],
+  ['Wind Cave National Park', 43.57, -103.48], ['Wrangell-St Elias National Park', 61.0, -142.0],
+  ['Yellowstone National Park', 44.428, -110.5885], ['Yosemite National Park', 37.8651, -119.5383],
+  ['Zion National Park', 37.2982, -113.0263],
+].map(([name, lat, lon]) => ({ name, lat, lon, type: 'park', minStayMinutes: 360, source: 'fallback' }));
+
+const SIGNIFICANT_LOCATIONS = [
+  { name: 'Banff National Park', lat: 51.4968, lon: -115.9281, type: 'park', minStayMinutes: 300, source: 'fallback' },
+  { name: 'Jasper National Park', lat: 52.8737, lon: -117.9543, type: 'park', minStayMinutes: 300, source: 'fallback' },
+  { name: 'Pacific Rim National Park Reserve', lat: 49.0833, lon: -125.75, type: 'park', minStayMinutes: 300, source: 'fallback' },
+  { name: 'Copper Canyon', lat: 27.5239, lon: -107.7417, type: 'natural', minStayMinutes: 300, source: 'fallback' },
+  { name: 'Barranca del Cobre Viewpoint', lat: 27.5132, lon: -107.7448, type: 'viewpoint', minStayMinutes: 240, source: 'fallback' },
+  { name: 'Chichen Itza', lat: 20.6843, lon: -88.5678, type: 'historic', minStayMinutes: 240, source: 'fallback' },
+  { name: 'Big Sur Scenic Coast', lat: 36.2704, lon: -121.8078, type: 'viewpoint', minStayMinutes: 240, source: 'fallback' },
+  { name: 'Niagara Falls State Park', lat: 43.0962, lon: -79.0377, type: 'viewpoint', minStayMinutes: 240, source: 'fallback' },
 ];
 
+const FALLBACK_POI_CATALOG = [...US_NATIONAL_PARKS, ...SIGNIFICANT_LOCATIONS];
 const reverseCache = new Map();
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   hideStatus();
+  setLoading(true, 5, 'Starting route build...');
 
   const data = new FormData(form);
   const origin = data.get('origin').toString().trim();
@@ -53,7 +94,6 @@ form.addEventListener('submit', async (event) => {
   const arriveBy = new Date(data.get('arriveBy').toString());
   const isRoundTrip = roundTripEl.checked;
   const returnArriveBy = isRoundTrip ? new Date(data.get('returnArriveBy').toString()) : null;
-
   const scenicness = clamp(Number(data.get('scenicness')), 0, 100);
   const stopTime = clamp(Number(data.get('stopTime')), 0, 180);
   const preferredStops = clamp(Number(data.get('preferredStops')), 1, 100);
@@ -63,23 +103,26 @@ form.addEventListener('submit', async (event) => {
   const includeParks = document.getElementById('includeParks').checked;
 
   if (!origin || !destination || Number.isNaN(departAt.getTime()) || Number.isNaN(arriveBy.getTime())) {
+    setLoading(false);
     showStatus('Please enter valid route and time values.');
     return;
   }
-
   if (arriveBy <= departAt) {
+    setLoading(false);
     showStatus('Destination arrival must be after departure.');
     return;
   }
-
   if (isRoundTrip && (!returnArriveBy || Number.isNaN(returnArriveBy.getTime()) || returnArriveBy <= arriveBy)) {
+    setLoading(false);
     showStatus('For round trip, return-home arrival must be after destination arrival.');
     return;
   }
 
   try {
+    setLoading(true, 15, 'Geocoding trip points...');
     const [originGeo, destinationGeo] = await Promise.all([geocode(origin), geocode(destination)]);
     if (!isInContinentalNorthAmerica(originGeo) || !isInContinentalNorthAmerica(destinationGeo)) {
+      setLoading(false);
       showStatus('ScenicView currently supports continental North America (Canada, U.S., Mexico mainland).');
       return;
     }
@@ -87,6 +130,7 @@ form.addEventListener('submit', async (event) => {
     const outboundWindowMinutes = Math.floor((arriveBy - departAt) / 60000);
     const returnWindowMinutes = isRoundTrip ? Math.floor((returnArriveBy - arriveBy) / 60000) : 0;
 
+    setLoading(true, 25, 'Estimating direct drive times...');
     const outboundDirectMinutes = await estimateDirectDriveMinutes(originGeo, destinationGeo);
     const returnDirectMinutes = isRoundTrip ? await estimateDirectDriveMinutes(destinationGeo, originGeo) : 0;
 
@@ -96,6 +140,7 @@ form.addEventListener('submit', async (event) => {
 
     const options = { scenicness, includeFood, includeParks, includeDriveThrough, includeVisitStops, stopTime };
 
+    setLoading(true, 40, 'Searching outbound POIs...');
     const outboundSelected = await planLeg({
       startGeo: originGeo,
       endGeo: destinationGeo,
@@ -105,38 +150,46 @@ form.addEventListener('submit', async (event) => {
       legLabel: 'Outbound',
     });
 
-    const returnSelected = isRoundTrip
-      ? await planLeg({
-          startGeo: destinationGeo,
-          endGeo: originGeo,
-          availableMinutes: returnWindowMinutes,
-          preferredStops: returnStopTarget,
-          options,
-          legLabel: 'Return',
-        })
-      : [];
+    let returnSelected = [];
+    if (isRoundTrip) {
+      setLoading(true, 60, 'Searching return-leg POIs...');
+      returnSelected = await planLeg({
+        startGeo: destinationGeo,
+        endGeo: originGeo,
+        availableMinutes: returnWindowMinutes,
+        preferredStops: returnStopTarget,
+        options,
+        legLabel: 'Return',
+      });
+    }
 
     const allSelected = [...outboundSelected, ...returnSelected].slice(0, MAX_STOPS);
     if (!allSelected.length) {
+      setLoading(false);
       showStatus('Not enough time for scenic stops with the chosen windows. Increase time or lower stop-time preference.');
       return;
     }
 
+    setLoading(true, 75, 'Building stop descriptions...');
     const described = await enrichDescriptions(allSelected);
 
-    const outboundDriveWithStops = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, described.filter((s) => s.leg === 'Outbound'));
-    const returnDriveWithStops = isRoundTrip
-      ? await estimateDriveMinutesForWaypoints(destinationGeo, originGeo, described.filter((s) => s.leg === 'Return'))
-      : 0;
+    setLoading(true, 88, 'Final route timing pass...');
+    const outboundStops = described.filter((s) => s.leg === 'Outbound');
+    const returnStops = described.filter((s) => s.leg === 'Return');
+    const outboundDriveWithStops = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, outboundStops);
+    const returnDriveWithStops = isRoundTrip ? await estimateDriveMinutesForWaypoints(destinationGeo, originGeo, returnStops) : 0;
 
-    const outboundStopMinutes = Math.round(described.filter((s) => s.leg === 'Outbound').reduce((a, b) => a + b.estimatedStopMinutes, 0));
-    const returnStopMinutes = Math.round(described.filter((s) => s.leg === 'Return').reduce((a, b) => a + b.estimatedStopMinutes, 0));
+    const outboundStopMinutes = Math.round(outboundStops.reduce((a, b) => a + b.estimatedStopMinutes, 0));
+    const returnStopMinutes = Math.round(returnStops.reduce((a, b) => a + b.estimatedStopMinutes, 0));
 
+    const outboundSleepMinutes = estimateSleepMinutes(outboundWindowMinutes);
+    const returnSleepMinutes = isRoundTrip ? estimateSleepMinutes(returnWindowMinutes) : 0;
+
+    setLoading(true, 100, 'Done. Rendering route...');
     renderPlan({
       origin,
       destination,
       isRoundTrip,
-      returnArriveBy,
       outboundWindowMinutes,
       returnWindowMinutes,
       outboundDirectMinutes,
@@ -145,11 +198,15 @@ form.addEventListener('submit', async (event) => {
       returnDriveWithStops,
       outboundStopMinutes,
       returnStopMinutes,
+      outboundSleepMinutes,
+      returnSleepMinutes,
       preferredStops: cappedStops,
       selected: described,
     });
   } catch (error) {
     showStatus(`Could not build route due to a network or lookup issue: ${error.message}`);
+  } finally {
+    setLoading(false);
   }
 });
 
@@ -162,19 +219,17 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
     includeParks: options.includeParks,
   });
 
-  const filtered = applyTypeFilters(candidatePool, {
-    includeDriveThrough: options.includeDriveThrough,
-    includeVisitStops: options.includeVisitStops,
-    includeFood: options.includeFood,
-    includeParks: options.includeParks,
-  });
-
+  const filtered = applyTypeFilters(candidatePool, options);
   const ranked = rankCandidates(filtered, options.scenicness);
+
+  const sleepMinutes = estimateSleepMinutes(availableMinutes);
+  const effectiveAvailable = Math.max(0, availableMinutes - sleepMinutes);
+
   const selected = await planStopsWithinTime({
     ranked,
     originGeo: startGeo,
     destinationGeo: endGeo,
-    availableMinutes,
+    availableMinutes: effectiveAvailable,
     stopTime: options.stopTime,
     preferredCapped: Math.min(preferredStops, MAX_STOPS),
   });
@@ -183,19 +238,41 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
 }
 
 async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood, includeParks }) {
-  const midpoint = { lat: (originGeo.lat + destinationGeo.lat) / 2, lon: (originGeo.lon + destinationGeo.lon) / 2 };
-  const routeKm = haversineKm(originGeo, destinationGeo);
-  const radius = Math.round(30000 + scenicness * 1000 + Math.min(routeKm * 350, 150000));
-  const settled = await Promise.allSettled([
-    fetchOverpassPois(midpoint, radius, { includeFood, includeParks }),
-    fetchWikipediaPois(midpoint, radius),
-  ]);
-  const pooled = [];
+  const centers = buildRouteSampleCenters(originGeo, destinationGeo);
+  const baseRadius = Math.round(15000 + scenicness * 450);
+
+  const overpassCalls = centers.map((center) => fetchOverpassPois(center, baseRadius, { includeFood, includeParks }));
+  const wikiCalls = centers.slice(1, 2).map((center) => fetchWikipediaPois(center, Math.round(baseRadius * 2.2)));
+
+  const settled = await Promise.allSettled([...overpassCalls, ...wikiCalls]);
+  const live = [];
   settled.forEach((res) => {
-    if (res.status === 'fulfilled') pooled.push(...res.value);
+    if (res.status === 'fulfilled') live.push(...res.value);
   });
-  pooled.push(...FALLBACK_POI_CATALOG.map((x) => ({ ...x, source: 'fallback', tags: {} })));
-  return dedupePois(pooled).filter((p) => isInContinentalNorthAmerica(p));
+
+  const liveDeduped = dedupePois(live).filter((p) => isInContinentalNorthAmerica(p));
+
+  // fallback only supplements when live data is sparse
+  if (liveDeduped.length >= 24) return liveDeduped;
+
+  const needed = Math.max(8, 24 - liveDeduped.length);
+  const nearestFallback = FALLBACK_POI_CATALOG
+    .map((poi) => ({ ...poi, dist: distanceToSegmentKm(poi, originGeo, destinationGeo) }))
+    .sort((a, b) => a.dist - b.dist)
+    .slice(0, needed)
+    .map(({ dist, ...poi }) => ({ ...poi, tags: {}, source: 'fallback' }));
+
+  return dedupePois([...liveDeduped, ...nearestFallback]);
+}
+
+function buildRouteSampleCenters(originGeo, destinationGeo) {
+  return [
+    originGeo,
+    interpolate(originGeo, destinationGeo, 0.33),
+    interpolate(originGeo, destinationGeo, 0.5),
+    interpolate(originGeo, destinationGeo, 0.66),
+    destinationGeo,
+  ];
 }
 
 async function fetchOverpassPois(center, radius, { includeFood, includeParks }) {
@@ -210,18 +287,19 @@ async function fetchOverpassPois(center, radius, { includeFood, includeParks }) 
     : '';
   const foodQuery = includeFood ? `nwr(around:${radius},${center.lat},${center.lon})[amenity=restaurant];` : '';
 
-  const query = `[out:json][timeout:25];(${parksQuery}${foodQuery}
+  const query = `[out:json][timeout:20];(${parksQuery}${foodQuery}
       nwr(around:${radius},${center.lat},${center.lon})[tourism=attraction];
       nwr(around:${radius},${center.lat},${center.lon})[historic];
       nwr(around:${radius},${center.lat},${center.lon})[natural];
       nwr(around:${radius},${center.lat},${center.lon})[place~"city|town|village"];
-    ); out center 300;`;
+    ); out center 180;`;
 
   const response = await fetchWithRetry(overpassBase, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
     body: query,
-  });
+  }, 2);
+
   const json = await response.json();
   return (json.elements || [])
     .map((el) => {
@@ -246,12 +324,13 @@ async function fetchWikipediaPois(center, radius) {
     action: 'query',
     list: 'geosearch',
     gscoord: `${center.lat}|${center.lon}`,
-    gsradius: String(Math.min(radius, 250000)),
-    gslimit: '60',
+    gsradius: String(Math.min(radius, 200000)),
+    gslimit: '50',
     format: 'json',
     origin: '*',
   });
-  const response = await fetchWithRetry(`${wikiBase}?${params}`, { method: 'GET', headers: { Accept: 'application/json' } });
+
+  const response = await fetchWithRetry(`${wikiBase}?${params}`, { method: 'GET', headers: { Accept: 'application/json' } }, 2);
   const json = await response.json();
   return (json.query?.geosearch || []).map((row) => ({
     name: row.title,
@@ -275,50 +354,65 @@ function applyTypeFilters(candidates, options) {
 }
 
 function rankCandidates(candidates, scenicness) {
-  return [...candidates].map((poi) => ({ ...poi, score: scorePoi(poi, scenicness) })).sort((a, b) => b.score - a.score);
+  return [...candidates]
+    .map((poi) => ({ ...poi, score: scorePoi(poi, scenicness) }))
+    .sort((a, b) => b.score - a.score);
 }
 
 async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availableMinutes, stopTime, preferredCapped }) {
   const selected = [];
   for (const candidate of ranked) {
     if (selected.length >= preferredCapped || selected.length >= MAX_STOPS) break;
-    const estimatedStopMinutes = estimateStopDuration(candidate.type, stopTime);
+
+    const estimatedStopMinutes = estimateStopDuration(candidate.type, stopTime, candidate.minStayMinutes);
     const tentative = [...selected, { ...candidate, estimatedStopMinutes }];
     const driveMinutes = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, tentative);
     const stopMinutes = tentative.reduce((sum, p) => sum + p.estimatedStopMinutes, 0);
-    if (driveMinutes + stopMinutes <= availableMinutes) selected.push({ ...candidate, estimatedStopMinutes });
+
+    if (driveMinutes + stopMinutes <= availableMinutes) {
+      selected.push({ ...candidate, estimatedStopMinutes });
+    }
   }
   return selected;
 }
 
-function estimateStopDuration(type, userPreferenceMinutes) {
-  const baseline = { viewpoint: 12, food: 45, park: 60, campground: 120, city: 50, landmark: 35, historic: 35, natural: 30 }[type] || 30;
-  if (userPreferenceMinutes === 0) return Math.max(5, Math.round(baseline * 0.5));
-  return Math.max(5, Math.min(240, Math.round(baseline * 0.65 + userPreferenceMinutes * 0.35)));
+function estimateStopDuration(type, userPreferenceMinutes, minStayMinutes) {
+  const baseline = { viewpoint: 25, food: 50, park: 120, campground: 360, city: 80, landmark: 45, historic: 60, natural: 70 }[type] || 40;
+  const userAdjusted = userPreferenceMinutes === 0 ? Math.max(10, Math.round(baseline * 0.5)) : Math.round(baseline * 0.6 + userPreferenceMinutes * 0.4);
+  if (minStayMinutes) return Math.max(userAdjusted, minStayMinutes);
+  return Math.max(10, Math.min(480, userAdjusted));
+}
+
+function estimateSleepMinutes(windowMinutes) {
+  const fullDays = Math.floor(windowMinutes / 1440);
+  if (fullDays <= 0) return 0;
+  const nightly = Math.round((MULTI_DAY_SLEEP_MIN + MULTI_DAY_SLEEP_MAX) / 2);
+  return fullDays * nightly;
 }
 
 function scorePoi(poi, scenicness) {
-  const sourceWeight = poi.source === 'overpass' ? 1.5 : poi.source === 'wikipedia' ? 1.2 : 1;
+  const sourceWeight = poi.source === 'overpass' ? 1.8 : poi.source === 'wikipedia' ? 1.3 : 0.75;
   const scenicBoost = {
-    viewpoint: 1 + scenicness / 60,
-    park: 1 + scenicness / 80,
-    campground: 1 + scenicness / 75,
-    natural: 1 + scenicness / 90,
-    landmark: 1 + scenicness / 110,
-    historic: 1 + scenicness / 120,
+    viewpoint: 1 + scenicness / 55,
+    park: 1 + scenicness / 70,
+    campground: 1 + scenicness / 60,
+    natural: 1 + scenicness / 85,
+    landmark: 1 + scenicness / 120,
+    historic: 1 + scenicness / 130,
     city: 1,
     food: restaurantQualityScore(poi, scenicness),
   }[poi.type] || 1;
-  const chainPenalty = isChainRestaurant(poi) ? (scenicness > 60 ? 0.65 : 1.05) : scenicness > 60 ? 1.2 : 1;
+
+  const chainPenalty = isChainRestaurant(poi) ? (scenicness > 60 ? 0.6 : 1.05) : scenicness > 60 ? 1.15 : 1;
   return sourceWeight * scenicBoost * chainPenalty;
 }
 
 function restaurantQualityScore(poi, scenicness) {
   if (poi.type !== 'food') return 1;
   const tags = poi.tags || {};
-  const hasCuisine = tags.cuisine ? 1.12 : 1;
-  const scenicFood = tags.cuisine?.includes('seafood') || tags.cuisine?.includes('regional') || tags.cuisine?.includes('local') || /view|coast|mountain|river|farm/i.test(poi.name) ? 1.2 : 0.95;
-  const quickFood = isChainRestaurant(poi) ? 1.2 : 0.95;
+  const hasCuisine = tags.cuisine ? 1.1 : 1;
+  const scenicFood = /seafood|regional|local|farm|coast|mountain|view|river/i.test(`${tags.cuisine || ''} ${poi.name}`) ? 1.22 : 0.92;
+  const quickFood = isChainRestaurant(poi) ? 1.18 : 0.95;
   return hasCuisine * (scenicness >= 50 ? scenicFood : quickFood);
 }
 
@@ -334,25 +428,27 @@ async function enrichDescriptions(selected) {
 function buildDescription(poi, reverse) {
   const near = reverse?.near ? ` near ${reverse.near}` : '';
   const country = reverse?.country ? ` in ${reverse.country}` : '';
+  const minStayText = poi.minStayMinutes ? ` Minimum recommended stay: ${Math.round(poi.minStayMinutes / 60)}-${Math.round((poi.minStayMinutes + 120) / 60)}h.` : '';
   const typeText = {
-    viewpoint: 'Scenic viewpoint with strong photo value',
-    park: 'Park/recreation area suitable for walks or short hikes',
-    campground: 'Campground-style stop suitable for longer journey breaks',
-    food: 'Restaurant stop selected to fit your scenic preference level',
-    city: 'Town/city area with local character and services',
-    historic: 'Historic location with local context and attractions',
-    natural: 'Natural feature stop with outdoors appeal',
-    landmark: 'Notable attraction that adds variety to the route',
-  }[poi.type] || 'Interesting stop along your route';
-  return `${typeText}${near}${country}. Recommended stop: about ${poi.estimatedStopMinutes} min.`;
+    viewpoint: 'Scenic viewpoint with strong photo value.',
+    park: 'Park/recreation area suitable for hikes and nature exploration.',
+    campground: 'Campground-style stop suitable for longer overnights.',
+    food: 'Restaurant stop selected to fit your scenic preference level.',
+    city: 'Town/city area with local character and services.',
+    historic: 'Historic location with local context and attractions.',
+    natural: 'Natural feature stop with outdoors appeal.',
+    landmark: 'Notable attraction that adds variety to the route.',
+  }[poi.type] || 'Interesting stop along your route.';
+  return `${typeText}${near}${country} Recommended stop: about ${poi.estimatedStopMinutes} min.${minStayText}`;
 }
 
 async function reverseLookup(lat, lon) {
   const key = `${lat.toFixed(4)},${lon.toFixed(4)}`;
   if (reverseCache.has(key)) return reverseCache.get(key);
+
   const url = `${nominatimReverseBase}?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&format=json&zoom=10`;
   try {
-    const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } });
+    const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } }, 2);
     const addr = (await response.json()).address || {};
     const out = { near: addr.city || addr.town || addr.village || addr.county || addr.state || null, country: addr.country || null };
     reverseCache.set(key, out);
@@ -364,16 +460,17 @@ async function reverseLookup(lat, lon) {
   }
 }
 
-function renderPlan(context) {
+function renderPlan(ctx) {
   const {
     origin, destination, isRoundTrip, outboundWindowMinutes, returnWindowMinutes, outboundDirectMinutes, returnDirectMinutes,
-    outboundDriveWithStops, returnDriveWithStops, outboundStopMinutes, returnStopMinutes, preferredStops, selected,
-  } = context;
+    outboundDriveWithStops, returnDriveWithStops, outboundStopMinutes, returnStopMinutes, outboundSleepMinutes, returnSleepMinutes,
+    preferredStops, selected,
+  } = ctx;
 
   if (isRoundTrip) {
-    timingSummary.textContent = `Round trip planned. Outbound window: ${outboundWindowMinutes} min (direct ~${outboundDirectMinutes}, planned drive ~${outboundDriveWithStops}, stops ~${outboundStopMinutes}). Return window: ${returnWindowMinutes} min (direct ~${returnDirectMinutes}, planned drive ~${returnDriveWithStops}, stops ~${returnStopMinutes}). Total stops planned: ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    timingSummary.textContent = `Round trip planned. Outbound window ${outboundWindowMinutes} min (direct ~${outboundDirectMinutes}, drive ~${outboundDriveWithStops}, stops ~${outboundStopMinutes}, sleep reserve ~${outboundSleepMinutes}). Return window ${returnWindowMinutes} min (direct ~${returnDirectMinutes}, drive ~${returnDriveWithStops}, stops ~${returnStopMinutes}, sleep reserve ~${returnSleepMinutes}). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   } else {
-    timingSummary.textContent = `One-way trip planned. Window: ${outboundWindowMinutes} min, direct ~${outboundDirectMinutes} min, planned drive ~${outboundDriveWithStops} min, planned stop time ~${outboundStopMinutes} min. Stops: ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    timingSummary.textContent = `One-way trip planned. Window ${outboundWindowMinutes} min (direct ~${outboundDirectMinutes}, drive ~${outboundDriveWithStops}, stops ~${outboundStopMinutes}, sleep reserve ~${outboundSleepMinutes}). Stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   }
 
   poiList.innerHTML = '';
@@ -386,9 +483,7 @@ function renderPlan(context) {
   const outStops = selected.filter((s) => s.leg === 'Outbound').map((x) => `${x.lat},${x.lon}`);
   const retStops = selected.filter((s) => s.leg === 'Return').map((x) => `${x.lat},${x.lon}`);
 
-  const googleWaypoints = isRoundTrip
-    ? [...outStops, destination, ...retStops].slice(0, MAX_STOPS)
-    : outStops.slice(0, MAX_STOPS);
+  const googleWaypoints = isRoundTrip ? [...outStops, destination, ...retStops].slice(0, MAX_STOPS) : outStops.slice(0, MAX_STOPS);
   const googleDestination = isRoundTrip ? origin : destination;
 
   openGoogle.href =
@@ -396,20 +491,15 @@ function renderPlan(context) {
     `&destination=${encodeURIComponent(googleDestination)}&travelmode=driving` +
     (googleWaypoints.length ? `&waypoints=${encodeURIComponent(googleWaypoints.join('|'))}` : '');
 
-  const appleStops = isRoundTrip
-    ? [...outStops, destination, ...retStops, origin].slice(0, MAX_STOPS + 1)
-    : [...outStops, destination];
-
-  openApple.href =
-    `https://maps.apple.com/?saddr=${encodeURIComponent(origin)}` +
-    `&daddr=${encodeURIComponent(appleStops.join(' to:'))}&dirflg=d`;
+  const appleStops = isRoundTrip ? [...outStops, destination, ...retStops, origin].slice(0, MAX_STOPS + 1) : [...outStops, destination];
+  openApple.href = `https://maps.apple.com/?saddr=${encodeURIComponent(origin)}&daddr=${encodeURIComponent(appleStops.join(' to:'))}&dirflg=d`;
 
   results.hidden = false;
 }
 
 async function geocode(query) {
   const url = `${nominatimSearchBase}?q=${encodeURIComponent(query)}&format=json&limit=1`;
-  const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } });
+  const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } }, 2);
   const rows = await response.json();
   if (!rows.length) throw new Error(`No map match found for "${query}".`);
   return { lat: Number(rows[0].lat), lon: Number(rows[0].lon) };
@@ -418,8 +508,8 @@ async function geocode(query) {
 async function estimateDirectDriveMinutes(origin, destination) {
   const url = `${osrmBase}/${origin.lon},${origin.lat};${destination.lon},${destination.lat}?overview=false&steps=false`;
   try {
-    const res = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } });
-    const sec = (await res.json()).routes?.[0]?.duration;
+    const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } }, 2);
+    const sec = (await response.json()).routes?.[0]?.duration;
     if (sec) return Math.max(1, Math.round(sec / 60));
   } catch {}
   return Math.max(1, Math.round((haversineKm(origin, destination) * 1.28 * 60) / 72));
@@ -431,10 +521,11 @@ async function estimateDriveMinutesForWaypoints(origin, destination, waypoints) 
   const coords = [`${origin.lon},${origin.lat}`, ...capped.map((w) => `${w.lon},${w.lat}`), `${destination.lon},${destination.lat}`].join(';');
   const url = `${osrmBase}/${coords}?overview=false&steps=false`;
   try {
-    const res = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } });
-    const sec = (await res.json()).routes?.[0]?.duration;
+    const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } }, 2);
+    const sec = (await response.json()).routes?.[0]?.duration;
     if (sec) return Math.max(1, Math.round(sec / 60));
   } catch {}
+
   const hops = [origin, ...capped, destination];
   let km = 0;
   for (let i = 0; i < hops.length - 1; i += 1) km += haversineKm(hops[i], hops[i + 1]);
@@ -445,7 +536,7 @@ async function fetchWithRetry(url, init, maxAttempts = 3) {
   let lastError;
   for (let i = 1; i <= maxAttempts; i += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000 + i * 2000);
+    const timeout = setTimeout(() => controller.abort(), 10000 + i * 2000);
     try {
       const response = await fetch(url, { ...init, signal: controller.signal });
       clearTimeout(timeout);
@@ -454,7 +545,7 @@ async function fetchWithRetry(url, init, maxAttempts = 3) {
     } catch (error) {
       clearTimeout(timeout);
       lastError = error;
-      await sleep(250 * i + Math.random() * 300);
+      await sleep(220 * i + Math.random() * 260);
     }
   }
   throw lastError || new Error('Network request failed.');
@@ -490,6 +581,14 @@ function dedupePois(items) {
   });
 }
 
+function distanceToSegmentKm(p, a, b) {
+  return Math.min(haversineKm(p, a), haversineKm(p, b), haversineKm(p, interpolate(a, b, 0.5)));
+}
+
+function interpolate(a, b, t) {
+  return { lat: a.lat + (b.lat - a.lat) * t, lon: a.lon + (b.lon - a.lon) * t };
+}
+
 function isInContinentalNorthAmerica(point) {
   return point.lat >= 14 && point.lat <= 84 && point.lon >= -170 && point.lon <= -52;
 }
@@ -502,6 +601,15 @@ function haversineKm(a, b) {
   const lat2 = toRad(b.lat);
   const s = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function setLoading(active, pct = 0, text = 'Working...') {
+  loadingCard.hidden = !active;
+  buildBtn.disabled = active;
+  if (active) {
+    loadingBar.value = pct;
+    loadingText.textContent = text;
+  }
 }
 
 function toRad(deg) { return (deg * Math.PI) / 180; }
