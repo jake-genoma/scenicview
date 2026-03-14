@@ -137,6 +137,19 @@ form.addEventListener('submit', async (event) => {
     const outboundDirectMinutes = await estimateDirectDriveMinutes(originGeo, destinationGeo);
     const returnDirectMinutes = isRoundTrip ? await estimateDirectDriveMinutes(destinationGeo, originGeo) : 0;
 
+    const outboundSleepMinutes = estimateSleepMinutes(outboundWindowMinutes);
+    const returnSleepMinutes = isRoundTrip ? estimateSleepMinutes(returnWindowMinutes) : 0;
+    if (outboundDirectMinutes + outboundSleepMinutes > outboundWindowMinutes) {
+      setLoading(false);
+      showStatus('Outbound window is too short once drive time and sleep reserve are included. Add more time or choose closer points.');
+      return;
+    }
+    if (isRoundTrip && returnDirectMinutes + returnSleepMinutes > returnWindowMinutes) {
+      setLoading(false);
+      showStatus('Return window is too short once drive time and sleep reserve are included. Add more time or extend return arrival.');
+      return;
+    }
+
     const cappedStops = Math.min(preferredStops, MAX_STOPS);
     const outboundStopTarget = isRoundTrip ? Math.max(1, Math.ceil(cappedStops / 2)) : cappedStops;
     const returnStopTarget = isRoundTrip ? Math.max(1, Math.floor(cappedStops / 2)) : 0;
@@ -167,44 +180,61 @@ form.addEventListener('submit', async (event) => {
     }
 
     const allSelected = [...outboundSelected, ...returnSelected].slice(0, MAX_STOPS);
-    if (!allSelected.length) {
-      setLoading(false);
-      showStatus('Not enough time for scenic stops with the chosen windows. Increase time or lower stop-time preference.');
-      return;
-    }
 
     setLoading(true, 75, 'Building stop descriptions...');
     const described = await enrichDescriptions(allSelected);
 
     setLoading(true, 88, 'Final route timing pass...');
-    const outboundStops = described.filter((s) => s.leg === 'Outbound');
-    const returnStops = described.filter((s) => s.leg === 'Return');
-    const outboundDriveWithStops = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, outboundStops);
-    const returnDriveWithStops = isRoundTrip ? await estimateDriveMinutesForWaypoints(destinationGeo, originGeo, returnStops) : 0;
+    let outboundStops = described.filter((s) => s.leg === 'Outbound');
+    let returnStops = described.filter((s) => s.leg === 'Return');
 
-    const outboundStopMinutes = Math.round(outboundStops.reduce((a, b) => a + b.estimatedStopMinutes, 0));
-    const returnStopMinutes = Math.round(returnStops.reduce((a, b) => a + b.estimatedStopMinutes, 0));
+    outboundStops = await fitStopsToWindow({
+      stops: outboundStops,
+      originGeo,
+      destinationGeo,
+      windowMinutes: outboundWindowMinutes,
+      sleepMinutes: outboundSleepMinutes,
+    });
+    if (isRoundTrip) {
+      returnStops = await fitStopsToWindow({
+        stops: returnStops,
+        originGeo: destinationGeo,
+        destinationGeo: originGeo,
+        windowMinutes: returnWindowMinutes,
+        sleepMinutes: returnSleepMinutes,
+      });
+    }
 
-    const outboundSleepMinutes = estimateSleepMinutes(outboundWindowMinutes);
-    const returnSleepMinutes = isRoundTrip ? estimateSleepMinutes(returnWindowMinutes) : 0;
+    const outboundTiming = await computeLegTiming({
+      originGeo,
+      destinationGeo,
+      stops: outboundStops,
+      windowMinutes: outboundWindowMinutes,
+      sleepMinutes: outboundSleepMinutes,
+      directMinutes: outboundDirectMinutes,
+    });
+    const returnTiming = isRoundTrip
+      ? await computeLegTiming({
+        originGeo: destinationGeo,
+        destinationGeo: originGeo,
+        stops: returnStops,
+        windowMinutes: returnWindowMinutes,
+        sleepMinutes: returnSleepMinutes,
+        directMinutes: returnDirectMinutes,
+      })
+      : { windowMinutes: 0, directMinutes: 0, driveWithStopsMinutes: 0, stopMinutes: 0, sleepMinutes: 0, usedMinutes: 0, slackMinutes: 0 };
+
+    const trimmedSelected = [...outboundStops, ...returnStops];
 
     setLoading(true, 100, 'Done. Rendering route...');
     renderPlan({
       origin,
       destination,
       isRoundTrip,
-      outboundWindowMinutes,
-      returnWindowMinutes,
-      outboundDirectMinutes,
-      returnDirectMinutes,
-      outboundDriveWithStops,
-      returnDriveWithStops,
-      outboundStopMinutes,
-      returnStopMinutes,
-      outboundSleepMinutes,
-      returnSleepMinutes,
+      outboundTiming,
+      returnTiming,
       preferredStops: cappedStops,
-      selected: described,
+      selected: trimmedSelected,
     });
   } catch (error) {
     showStatus(`Could not build route due to a network or lookup issue: ${error.message}`);
@@ -788,17 +818,46 @@ async function reverseLookup(lat, lon) {
   }
 }
 
+async function computeLegTiming({ originGeo, destinationGeo, stops, windowMinutes, sleepMinutes, directMinutes }) {
+  const driveWithStopsMinutes = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, stops);
+  const stopMinutes = Math.round(stops.reduce((a, b) => a + b.estimatedStopMinutes, 0));
+  const usedMinutes = driveWithStopsMinutes + stopMinutes + sleepMinutes;
+  return {
+    windowMinutes,
+    directMinutes,
+    driveWithStopsMinutes,
+    stopMinutes,
+    sleepMinutes,
+    usedMinutes,
+    slackMinutes: windowMinutes - usedMinutes,
+  };
+}
+
+async function fitStopsToWindow({ stops, originGeo, destinationGeo, windowMinutes, sleepMinutes }) {
+  const fitted = [...stops];
+  while (fitted.length) {
+    const driveMinutes = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, fitted);
+    const stopMinutes = Math.round(fitted.reduce((sum, p) => sum + p.estimatedStopMinutes, 0));
+    if (driveMinutes + stopMinutes + sleepMinutes <= windowMinutes) break;
+    fitted.pop();
+  }
+  return fitted;
+}
+
 function renderPlan(ctx) {
   const {
-    origin, destination, isRoundTrip, outboundWindowMinutes, returnWindowMinutes, outboundDirectMinutes, returnDirectMinutes,
-    outboundDriveWithStops, returnDriveWithStops, outboundStopMinutes, returnStopMinutes, outboundSleepMinutes, returnSleepMinutes,
-    preferredStops, selected,
+    origin, destination, isRoundTrip, outboundTiming, returnTiming, preferredStops, selected,
   } = ctx;
 
+  const outboundSummary = `Outbound: window ${outboundTiming.windowMinutes} min, direct ~${outboundTiming.directMinutes}, drive with stops ~${outboundTiming.driveWithStopsMinutes}, stop time ~${outboundTiming.stopMinutes}, sleep reserve ~${outboundTiming.sleepMinutes}, used ${outboundTiming.usedMinutes}, remaining ${outboundTiming.slackMinutes} min`;
+
   if (isRoundTrip) {
-    timingSummary.textContent = `Round trip planned. Outbound window ${outboundWindowMinutes} min (direct ~${outboundDirectMinutes}, drive ~${outboundDriveWithStops}, stops ~${outboundStopMinutes}, sleep reserve ~${outboundSleepMinutes}). Return window ${returnWindowMinutes} min (direct ~${returnDirectMinutes}, drive ~${returnDriveWithStops}, stops ~${returnStopMinutes}, sleep reserve ~${returnSleepMinutes}). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    const returnSummary = `Return: window ${returnTiming.windowMinutes} min, direct ~${returnTiming.directMinutes}, drive with stops ~${returnTiming.driveWithStopsMinutes}, stop time ~${returnTiming.stopMinutes}, sleep reserve ~${returnTiming.sleepMinutes}, used ${returnTiming.usedMinutes}, remaining ${returnTiming.slackMinutes} min`;
+    const totalWindow = outboundTiming.windowMinutes + returnTiming.windowMinutes;
+    const totalUsed = outboundTiming.usedMinutes + returnTiming.usedMinutes;
+    timingSummary.textContent = `Round trip planned. ${outboundSummary}. ${returnSummary}. Combined used ${totalUsed}/${totalWindow} min (remaining ${totalWindow - totalUsed} min). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   } else {
-    timingSummary.textContent = `One-way trip planned. Window ${outboundWindowMinutes} min (direct ~${outboundDirectMinutes}, drive ~${outboundDriveWithStops}, stops ~${outboundStopMinutes}, sleep reserve ~${outboundSleepMinutes}). Stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    timingSummary.textContent = `One-way trip planned. ${outboundSummary}. Stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   }
 
   poiList.innerHTML = '';
