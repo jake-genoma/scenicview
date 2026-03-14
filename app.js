@@ -242,13 +242,12 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
 
 async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood, includeParks }) {
   const centers = buildRouteSampleCenters(originGeo, destinationGeo);
-  const baseRadius = Math.round(12000 + scenicness * 520);
+  const baseRadius = Math.round(15000 + scenicness * 450);
 
   const overpassCalls = centers.map((center) => fetchOverpassPois(center, baseRadius, { includeFood, includeParks }));
-  const wikiCalls = centers.filter((_, idx) => idx % 2 === 1).map((center) => fetchWikipediaPois(center, Math.round(baseRadius * 2.1)));
-  const townAnchorsCall = buildTownAnchorsFromCenters(centers);
+  const wikiCalls = centers.slice(1, 2).map((center) => fetchWikipediaPois(center, Math.round(baseRadius * 2.2)));
 
-  const settled = await Promise.allSettled([...overpassCalls, ...wikiCalls, townAnchorsCall]);
+  const settled = await Promise.allSettled([...overpassCalls, ...wikiCalls]);
   const live = [];
   settled.forEach((res) => {
     if (res.status === 'fulfilled') live.push(...res.value);
