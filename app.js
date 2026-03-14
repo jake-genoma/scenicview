@@ -792,7 +792,7 @@ function buildDescription(poi, reverse, wikiSummary) {
   }[poi.type] || 'Interesting stop along your route.';
   const foodDetails = poi.type === 'food' ? buildFoodDetails(poi) : '';
   const details = wikiSummary ? ` ${wikiSummary}` : '';
-  return `${typeText}${foodDetails}${near}${country}${details} Recommended stop: about ${poi.estimatedStopMinutes} min.${minStayText}`;
+  return `${typeText}${foodDetails}${near}${country}${details} Recommended stop: about ${formatMinutesHuman(poi.estimatedStopMinutes)}.${minStayText}`;
 }
 
 function buildFoodDetails(poi) {
@@ -903,13 +903,13 @@ function renderPlan(ctx) {
     origin, destination, isRoundTrip, outboundTiming, returnTiming, preferredStops, selected,
   } = ctx;
 
-  const outboundSummary = `Outbound: window ${outboundTiming.windowMinutes} min, direct ~${outboundTiming.directMinutes}, drive with stops ~${outboundTiming.driveWithStopsMinutes}, stop time ~${outboundTiming.stopMinutes}, sleep reserve ~${outboundTiming.sleepMinutes}, used ${outboundTiming.usedMinutes}, remaining ${outboundTiming.slackMinutes} min`;
+  const outboundSummary = `Outbound: window ${formatMinutesHuman(outboundTiming.windowMinutes)}, direct ~${formatMinutesHuman(outboundTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(outboundTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(outboundTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(outboundTiming.sleepMinutes)}, used ${formatMinutesHuman(outboundTiming.usedMinutes)}, remaining ${formatMinutesSigned(outboundTiming.slackMinutes)}`;
 
   if (isRoundTrip) {
-    const returnSummary = `Return: window ${returnTiming.windowMinutes} min, direct ~${returnTiming.directMinutes}, drive with stops ~${returnTiming.driveWithStopsMinutes}, stop time ~${returnTiming.stopMinutes}, sleep reserve ~${returnTiming.sleepMinutes}, used ${returnTiming.usedMinutes}, remaining ${returnTiming.slackMinutes} min`;
+    const returnSummary = `Return: window ${formatMinutesHuman(returnTiming.windowMinutes)}, direct ~${formatMinutesHuman(returnTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(returnTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(returnTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(returnTiming.sleepMinutes)}, used ${formatMinutesHuman(returnTiming.usedMinutes)}, remaining ${formatMinutesSigned(returnTiming.slackMinutes)}`;
     const totalWindow = outboundTiming.windowMinutes + returnTiming.windowMinutes;
     const totalUsed = outboundTiming.usedMinutes + returnTiming.usedMinutes;
-    timingSummary.textContent = `Round trip planned. ${outboundSummary}. ${returnSummary}. Combined used ${totalUsed}/${totalWindow} min (remaining ${totalWindow - totalUsed} min). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    timingSummary.textContent = `Round trip planned. ${outboundSummary}. ${returnSummary}. Combined used ${formatMinutesHuman(totalUsed)}/${formatMinutesHuman(totalWindow)} (remaining ${formatMinutesSigned(totalWindow - totalUsed)}). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   } else {
     timingSummary.textContent = `One-way trip planned. ${outboundSummary}. Stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   }
@@ -1056,6 +1056,20 @@ function setLoading(active, pct = 0, text = 'Working...') {
 }
 
 function toRad(deg) { return (deg * Math.PI) / 180; }
+function formatMinutesHuman(totalMinutes) {
+  const minutes = Math.max(0, Math.round(totalMinutes || 0));
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours === 0) return `${remainingMinutes}m`;
+  if (remainingMinutes === 0) return `${hours}h`;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
+function formatMinutesSigned(totalMinutes) {
+  const sign = totalMinutes < 0 ? '-' : '';
+  return `${sign}${formatMinutesHuman(Math.abs(totalMinutes))}`;
+}
+
 function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
