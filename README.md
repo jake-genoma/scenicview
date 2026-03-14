@@ -38,4 +38,4 @@ Then open `http://localhost:4173`.
 
 ## Deploy as a hosted web app
 
-Because this is static HTML/CSS/JS, you can host it on Netlify, Vercel, Cloudflare Pages, GitHub Pages, or any static host.
+Check out https:/scenicview.genomabfx.com
