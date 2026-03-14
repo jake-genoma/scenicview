@@ -547,6 +547,7 @@ async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availabl
   const selected = [];
   const weights = normalizedPriorityWeights(priorities);
   const desiredMix = prioritizeFoodMix(desiredBucketCounts(preferredCapped, weights), preferredCapped, priorities.food, ranked);
+  const spreadTargets = buildSpreadTargets(preferredCapped);
 
   for (const candidate of ranked) {
     if (selected.length >= preferredCapped || selected.length >= MAX_STOPS) break;
@@ -556,6 +557,11 @@ async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availabl
     const needsBucket = currentMix[candidateBucket] < desiredMix[candidateBucket];
 
     if (!needsBucket && selected.length < Math.max(2, Math.floor(preferredCapped * 0.6))) {
+      continue;
+    }
+
+    const targetProgress = spreadTargets[Math.min(selected.length, spreadTargets.length - 1)] ?? 0.5;
+    if (!isSpreadFriendlyCandidate(candidate, selected, originGeo, destinationGeo, targetProgress, preferredCapped, true)) {
       continue;
     }
 
@@ -573,6 +579,9 @@ async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availabl
     for (const candidate of ranked) {
       if (selected.length >= preferredCapped || selected.length >= MAX_STOPS) break;
       if (selected.some((s) => s.name === candidate.name && Math.abs(s.lat - candidate.lat) < 0.001 && Math.abs(s.lon - candidate.lon) < 0.001)) continue;
+
+      const targetProgress = spreadTargets[Math.min(selected.length, spreadTargets.length - 1)] ?? 0.5;
+      if (!isSpreadFriendlyCandidate(candidate, selected, originGeo, destinationGeo, targetProgress, preferredCapped, false)) continue;
 
       const estimatedStopMinutes = estimateStopDuration(candidate.type, stopTime, candidate.minStayMinutes);
       const tentative = [...selected, { ...candidate, estimatedStopMinutes }];
@@ -636,6 +645,41 @@ function prioritizeFoodMix(baseMix, stopCount, foodPriority, ranked) {
   }
 
   return out;
+}
+
+
+function buildSpreadTargets(stopCount) {
+  if (stopCount <= 0) return [];
+  const jitter = Math.min(0.12, 0.35 / (stopCount + 1));
+  const targets = [];
+  for (let i = 0; i < stopCount; i += 1) {
+    const base = (i + 1) / (stopCount + 1);
+    const randomNudge = (Math.random() * 2 - 1) * jitter;
+    targets.push(clamp(base + randomNudge, 0.02, 0.98));
+  }
+  return targets;
+}
+
+function isSpreadFriendlyCandidate(candidate, selected, originGeo, destinationGeo, targetProgress, preferredCapped, strictTargeting) {
+  const candidateProgress = routeProgress(originGeo, destinationGeo, candidate);
+  const targetTolerance = strictTargeting ? clamp(0.32 - preferredCapped * 0.015, 0.1, 0.28) : 0.45;
+  if (Math.abs(candidateProgress - targetProgress) > targetTolerance) return false;
+
+  if (!selected.length) return true;
+  const minGap = clamp(0.82 / (preferredCapped + 1), 0.05, 0.22);
+  const tooClose = selected.some((poi) => Math.abs(routeProgress(originGeo, destinationGeo, poi) - candidateProgress) < minGap);
+  if (tooClose && strictTargeting) return false;
+  return !tooClose || Math.random() > 0.55;
+}
+
+function routeProgress(start, end, point) {
+  const vx = end.lon - start.lon;
+  const vy = end.lat - start.lat;
+  const wx = point.lon - start.lon;
+  const wy = point.lat - start.lat;
+  const denom = vx * vx + vy * vy;
+  if (!denom) return 0.5;
+  return clamp((wx * vx + wy * vy) / denom, 0, 1);
 }
 
 function priorityBucket(poi) {
