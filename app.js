@@ -164,6 +164,7 @@ form.addEventListener('submit', async (event) => {
       preferredStops: outboundStopTarget,
       options,
       legLabel: 'Outbound',
+      isRoundTripLeg: isRoundTrip,
     });
 
     let returnSelected = [];
@@ -176,6 +177,7 @@ form.addEventListener('submit', async (event) => {
         preferredStops: returnStopTarget,
         options,
         legLabel: 'Return',
+        isRoundTripLeg: true,
       });
     }
 
@@ -243,7 +245,7 @@ form.addEventListener('submit', async (event) => {
   }
 });
 
-async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, options, legLabel }) {
+async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, options, legLabel, isRoundTripLeg = false }) {
   const candidatePool = await buildPoiPool({
     originGeo: startGeo,
     destinationGeo: endGeo,
@@ -266,6 +268,8 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
     stopTime: options.stopTime,
     preferredCapped: Math.min(preferredStops, MAX_STOPS),
     priorities: options.priorities,
+    enforceFoodGapMinutes: 240,
+    enforceLegDiversity: isRoundTripLeg,
   });
 
   return selected.map((x) => ({ ...x, leg: legLabel }));
@@ -543,7 +547,10 @@ function rankCandidates(candidates, priorities) {
     .sort((a, b) => b.score - a.score);
 }
 
-async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availableMinutes, stopTime, preferredCapped, priorities }) {
+async function planStopsWithinTime({
+  ranked, originGeo, destinationGeo, availableMinutes, stopTime, preferredCapped, priorities,
+  enforceFoodGapMinutes = 0, enforceLegDiversity = false,
+}) {
   const selected = [];
   const weights = normalizedPriorityWeights(priorities);
   const desiredMix = prioritizeFoodMix(desiredBucketCounts(preferredCapped, weights), preferredCapped, priorities.food, ranked);
@@ -564,6 +571,12 @@ async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availabl
     if (!isSpreadFriendlyCandidate(candidate, selected, originGeo, destinationGeo, targetProgress, preferredCapped, true)) {
       continue;
     }
+    if (enforceLegDiversity && shouldSkipForLegDiversity(candidate, selected, preferredCapped)) {
+      continue;
+    }
+    if (violatesFoodSpacing(candidate, selected, originGeo, destinationGeo, availableMinutes, enforceFoodGapMinutes, true)) {
+      continue;
+    }
 
     const estimatedStopMinutes = estimateStopDuration(candidate.type, stopTime, candidate.minStayMinutes);
     const tentative = [...selected, { ...candidate, estimatedStopMinutes }];
@@ -582,6 +595,8 @@ async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availabl
 
       const targetProgress = spreadTargets[Math.min(selected.length, spreadTargets.length - 1)] ?? 0.5;
       if (!isSpreadFriendlyCandidate(candidate, selected, originGeo, destinationGeo, targetProgress, preferredCapped, false)) continue;
+      if (enforceLegDiversity && shouldSkipForLegDiversity(candidate, selected, preferredCapped)) continue;
+      if (violatesFoodSpacing(candidate, selected, originGeo, destinationGeo, availableMinutes, enforceFoodGapMinutes, false)) continue;
 
       const estimatedStopMinutes = estimateStopDuration(candidate.type, stopTime, candidate.minStayMinutes);
       const tentative = [...selected, { ...candidate, estimatedStopMinutes }];
@@ -680,6 +695,38 @@ function routeProgress(start, end, point) {
   const denom = vx * vx + vy * vy;
   if (!denom) return 0.5;
   return clamp((wx * vx + wy * vy) / denom, 0, 1);
+}
+
+
+function shouldSkipForLegDiversity(candidate, selected, preferredCapped) {
+  if (selected.length < 2 || preferredCapped < 3) return false;
+  const counts = countSelectedBuckets(selected);
+  const bucket = priorityBucket(candidate);
+  const dominantCount = Math.max(counts.scenic, counts.things, counts.food);
+  const missingBuckets = Object.values(counts).filter((x) => x === 0).length;
+  const candidateWouldBeDominant = counts[bucket] + 1 > dominantCount;
+  const earlyPhase = selected.length < Math.ceil(preferredCapped * 0.75);
+  return missingBuckets > 0 && candidateWouldBeDominant && earlyPhase;
+}
+
+function violatesFoodSpacing(candidate, selected, originGeo, destinationGeo, availableMinutes, gapMinutes, strict) {
+  if (candidate.type !== 'food' || gapMinutes <= 0) return false;
+  if (availableMinutes < 240) return false;
+
+  const foodStops = selected.filter((x) => x.type === 'food');
+  if (!foodStops.length) return false;
+
+  // For sub-8-hour legs, allow up to 3 food stops even if spacing is tighter.
+  if (availableMinutes < 480 && foodStops.length < 3) return false;
+
+  const candidateAt = routeProgress(originGeo, destinationGeo, candidate) * availableMinutes;
+  const nearestGap = foodStops
+    .map((poi) => Math.abs(routeProgress(originGeo, destinationGeo, poi) * availableMinutes - candidateAt))
+    .reduce((minGap, gap) => Math.min(minGap, gap), Number.POSITIVE_INFINITY);
+
+  if (nearestGap >= gapMinutes) return false;
+  if (strict) return true;
+  return nearestGap < gapMinutes * 0.72;
 }
 
 function priorityBucket(poi) {
