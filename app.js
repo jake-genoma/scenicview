@@ -255,10 +255,9 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
   const townAnchorsCall = buildTownAnchorsFromCenters(centers);
 
   // Additional open-data enrichment to expand smaller-town and local venue coverage.
-  const nominatimCalls = centers.flatMap((center) => [
-    fetchNominatimCategory(center, 'food', baseRadius),
-    fetchNominatimCategory(center, 'things', baseRadius),
-    fetchNominatimCategory(center, 'scenic', baseRadius),
+  const nominatimCalls = centers.filter((_, idx) => idx % 2 === 1).flatMap((center) => [
+    fetchNominatimCategory(center, 'food', Math.round(baseRadius * 0.85)),
+    fetchNominatimCategory(center, 'things', Math.round(baseRadius * 0.85)),
   ]);
 
   const settled = await Promise.allSettled([...categoryCalls, ...wikiCalls, townAnchorsCall, ...nominatimCalls]);
@@ -270,7 +269,7 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
   const liveDeduped = dedupePois(live).filter((poi) => isInContinentalNorthAmerica(poi));
 
   // Prefer live data; only use fallback when live discovery is truly sparse.
-  if (liveDeduped.length >= 8) return liveDeduped;
+  if (liveDeduped.length >= 10) return liveDeduped;
 
   const needed = Math.max(6, 14 - liveDeduped.length);
   const nearestFallback = FALLBACK_POI_CATALOG
@@ -283,15 +282,15 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
 }
 
 function buildRouteSampleCenters(originGeo, destinationGeo) {
-  const points = [0, 0.12, 0.24, 0.36, 0.5, 0.64, 0.76, 0.88, 1]
+  const points = [0, 0.25, 0.5, 0.75, 1]
     .map((ratio) => interpolate(originGeo, destinationGeo, ratio))
-    .map((p) => jitterPointNearRoute(p, originGeo, destinationGeo));
+    .map((p, i) => (i === 0 || i === 4 ? p : jitterPointNearRoute(p, originGeo, destinationGeo)));
 
   return points;
 }
 
 function jitterPointNearRoute(point, originGeo, destinationGeo) {
-  const maxJitterKm = Math.max(8, Math.min(40, haversineKm(originGeo, destinationGeo) * 0.12));
+  const maxJitterKm = Math.max(4, Math.min(18, haversineKm(originGeo, destinationGeo) * 0.06));
   const dx = (Math.random() * 2 - 1) * maxJitterKm;
   const dy = (Math.random() * 2 - 1) * maxJitterKm;
   const lat = point.lat + dy / 111;
@@ -553,7 +552,7 @@ function estimateSleepMinutes(windowMinutes) {
 }
 
 function scorePoi(poi, priorities) {
-  const sourceWeight = poi.source === 'overpass' ? 1.9 : poi.source === 'nominatim' ? 1.45 : poi.source === 'wikipedia' ? 1.3 : poi.source === 'town_anchor' ? 1.12 : 0.45;
+  const sourceWeight = poi.source === 'overpass' ? 1.9 : poi.source === 'nominatim' ? 1.5 : poi.source === 'wikipedia' ? 1.35 : poi.source === 'town_anchor' ? 1.15 : 0.8;
   const weights = normalizedPriorityWeights(priorities);
 
   const scenicQuality = scenicQualityScore(poi);
@@ -567,7 +566,7 @@ function scorePoi(poi, priorities) {
 
   const bucket = priorityBucket(poi);
   const bucketWeight = bucket === 'scenic' ? weights.scenic : bucket === 'things' ? weights.thingsToDo : weights.food;
-  const priorityPush = 0.85 + bucketWeight * 2.4;
+  const priorityPush = 0.9 + bucketWeight * 1.8;
 
   const oppositePenalty =
     bucket === 'food' ? (weights.food < 0.15 ? 0.82 : 1)
@@ -578,8 +577,16 @@ function scorePoi(poi, priorities) {
 }
 
 function normalizedPriorityWeights(priorities) {
-  // Equalized by request: all three sliders are treated equally in weighting.
-  return { scenic: 1 / 3, thingsToDo: 1 / 3, food: 1 / 3 };
+  const scenic = Math.pow(Math.max(0, priorities.scenic) / 100, 1.8);
+  const thingsToDo = Math.pow(Math.max(0, priorities.thingsToDo) / 100, 1.8);
+  const food = Math.pow(Math.max(0, priorities.food) / 100, 1.8);
+  const total = scenic + thingsToDo + food;
+  if (total === 0) return { scenic: 1 / 3, thingsToDo: 1 / 3, food: 1 / 3 };
+  return {
+    scenic: scenic / total,
+    thingsToDo: thingsToDo / total,
+    food: food / total,
+  };
 }
 
 function scenicQualityScore(poi) {
