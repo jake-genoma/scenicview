@@ -407,12 +407,18 @@ async function fetchNominatimCategory(center, category, radius) {
 
   const rows = await response.json();
   return (rows || []).map((row) => {
-    const name = row.name || row.display_name?.split(',')[0] || 'Local place';
     const tags = {
       amenity: row.type,
       tourism: row.class,
       place: row.type,
+      display_name: row.display_name,
+      address_city: row.address?.city || row.address?.town || row.address?.village || '',
+      address_state: row.address?.state || '',
     };
+    const name = buildPreciseName(
+      row.name || row.display_name?.split(',')[0] || 'Local place',
+      tags,
+    );
     return {
       name,
       lat: Number(row.lat),
@@ -642,14 +648,17 @@ async function enrichDescriptions(selected) {
   const reverseSettled = await Promise.allSettled(selected.map((poi) => reverseLookup(poi.lat, poi.lon)));
   const summarySettled = await Promise.allSettled(selected.map((poi) => fetchWikiSummaryForTitle(poi.name)));
 
-  return selected.map((poi, i) => ({
-    ...poi,
-    description: buildDescription(
-      poi,
-      reverseSettled[i].status === 'fulfilled' ? reverseSettled[i].value : null,
-      summarySettled[i].status === 'fulfilled' ? summarySettled[i].value : null,
-    ),
-  }));
+  return selected.map((poi, i) => {
+    const reverse = reverseSettled[i].status === 'fulfilled' ? reverseSettled[i].value : null;
+    const summary = summarySettled[i].status === 'fulfilled' ? summarySettled[i].value : null;
+    const preciseName = refineSelectedPlaceName(poi, reverse);
+
+    return {
+      ...poi,
+      preciseName,
+      description: buildDescription(poi, reverse, summary),
+    };
+  });
 }
 
 function buildDescription(poi, reverse, wikiSummary) {
@@ -687,6 +696,36 @@ async function fetchWikiSummaryForTitle(title) {
   }
 }
 
+function refineSelectedPlaceName(poi, reverse) {
+  return buildPreciseName(poi.name, {
+    ...(poi.tags || {}),
+    address_city: reverse?.near || '',
+    address_state: '',
+    country: reverse?.country || '',
+  });
+}
+
+function buildPreciseName(baseName, tags) {
+  const name = (baseName || '').trim() || 'Local place';
+  const city = tags.address_city || '';
+  const state = tags.address_state || '';
+  const country = tags.country || '';
+
+  const generic = /^(museum|gallery|restaurant|cafe|fast[_ ]?food|attraction|scenic location|park|viewpoint|historic|local place)$/i.test(name);
+
+  if (generic) {
+    const typeLabel = tags.amenity || tags.tourism || tags.place || 'POI';
+    const locality = [city, state || country].filter(Boolean).join(', ');
+    return locality ? `${typeLabel} — ${locality}` : typeLabel;
+  }
+
+  if (city && !name.toLowerCase().includes(city.toLowerCase())) {
+    return `${name} (${city}${state ? `, ${state}` : ''})`;
+  }
+
+  return name;
+}
+
 async function reverseLookup(lat, lon) {
   const key = `${lat.toFixed(4)},${lon.toFixed(4)}`;
   if (reverseCache.has(key)) return reverseCache.get(key);
@@ -721,7 +760,7 @@ function renderPlan(ctx) {
   poiList.innerHTML = '';
   selected.forEach((poi) => {
     const li = document.createElement('li');
-    li.textContent = `${poi.leg}: ${poi.name} (${poi.type}) — ${poi.description}`;
+    li.textContent = `${poi.leg}: ${poi.preciseName || poi.name} (${poi.type}) — ${poi.description}`;
     poiList.appendChild(li);
   });
 

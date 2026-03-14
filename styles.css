@@ -1,6 +1,5 @@
 :root {
   color-scheme: dark;
-  /* Requested palette adapted for dark theme */
   --c-red: #BC3C29;
   --c-blue: #0072B5;
   --c-orange: #E18727;
@@ -10,19 +9,20 @@
   --c-sand: #FFDC91;
   --c-pink: #EE4C97;
 
-  --bg: #11151c;
-  --bg-2: #1a2230;
-  --card: #1d2736;
-  --text: #edf2f7;
-  --muted: #b8c6d8;
-  --border: #33465f;
+  /* Dark UI values translated from the requested palette */
+  --bg: #0f1f2d;
+  --bg-2: #152c3d;
+  --card: #1a3547;
+  --text: #f7f4e8;
+  --muted: #b8cad4;
+  --border: #3d5d71;
 
   --accent: var(--c-blue);
-  --accent-2: var(--c-purple);
-  --good: #63d08d;
-  --status-bg: #3a241d;
-  --status-text: #ffd7c8;
-  --status-border: #7a4d3d;
+  --accent-2: var(--c-pink);
+  --good: var(--c-green);
+  --status-bg: #3d2324;
+  --status-text: #ffd8c9;
+  --status-border: #BC3C29;
 }
 
 * { box-sizing: border-box; }
@@ -30,7 +30,10 @@
 body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: radial-gradient(circle at top, #1e2d43 0%, var(--bg) 65%);
+  background:
+    radial-gradient(circle at top center, rgba(225, 135, 39, 0.36) 0%, rgba(225, 135, 39, 0.16) 34%, transparent 60%),
+    radial-gradient(circle at top right, rgba(0, 114, 181, 0.18) 0%, transparent 46%),
+    linear-gradient(180deg, #3a2818 0%, #251d17 48%, #171e25 100%);
   color: var(--text);
 }
 
@@ -42,11 +45,11 @@ body {
 
 h1, h2, h3 { margin-top: 0; }
 
-header h1 { color: #67c1ff; }
+header h1 { color: var(--c-sand); }
 header p { color: var(--muted); }
 
 .card {
-  background: linear-gradient(180deg, #1f2b3d, var(--card));
+  background: linear-gradient(180deg, #21435b, var(--card));
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 1.2rem;
@@ -90,7 +93,7 @@ button,
   border: none;
   border-radius: 10px;
   padding: 0.68rem 1.05rem;
-  background: linear-gradient(135deg, var(--c-blue), var(--c-purple));
+  background: linear-gradient(135deg, var(--c-blue), var(--c-purple) 55%, var(--c-pink));
   color: #fff;
   text-decoration: none;
   font-weight: 700;
@@ -119,8 +122,8 @@ progress {
   height: 15px;
 }
 
-#loadingCard h2 { color: #c0b5ff; }
-#loadingText { color: var(--good); }
+#loadingCard h2 { color: var(--c-sand); }
+#loadingText { color: #54c07a; }
 #poiList { padding-left: 1.2rem; }
 .actions { display: flex; gap: 0.65rem; flex-wrap: wrap; }
 #status {
