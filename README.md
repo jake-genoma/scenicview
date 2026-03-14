@@ -13,9 +13,9 @@ ScenicView is a lightweight hosted-web-app-ready route planner for people who wa
   - **Food priority** (0-100)
   - **Stop time preference** (0-180 min per stop)
   - **Preferred stops** (1-100 input, capped to 10 exported stops due to Apple/Google Maps waypoint limits)
-- All stop categories are considered by default (scenic, things to do, food) and balanced by the priority sliders.
+- All stop categories are considered by default (scenic, things to do, food) and strongly weighted by the priority sliders (high values push those categories much harder).
 - Uses multiple POI sources:
-  - OpenStreetMap/Overpass (restaurants, parks, attractions, viewpoints, historic and natural places)
+  - OpenStreetMap/Overpass (restaurants/cafes, parks, attractions, museums, galleries, theaters/arts centers, viewpoints, historic and natural places, plus smaller towns)
   - Wikipedia geosearch landmarks
   - Expanded fallback catalog with all U.S. national parks plus significant Canada/Mexico locations.
 - Fallback locations include high minimum-recommended stays (4-8+ hours) and are mainly used to supplement sparse live POI results.

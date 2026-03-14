@@ -253,12 +253,11 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
     if (res.status === 'fulfilled') live.push(...res.value);
   });
 
-  const liveDeduped = dedupePois(live).filter((p) => isInContinentalNorthAmerica(p));
+  const liveDeduped = dedupePois(live).filter((poi) => isInContinentalNorthAmerica(poi));
 
-  // fallback only supplements when live data is sparse
-  if (liveDeduped.length >= 24) return liveDeduped;
+  if (liveDeduped.length >= 34) return liveDeduped;
 
-  const needed = Math.max(8, 24 - liveDeduped.length);
+  const needed = Math.max(10, 34 - liveDeduped.length);
   const nearestFallback = FALLBACK_POI_CATALOG
     .map((poi) => ({ ...poi, dist: distanceToSegmentKm(poi, originGeo, destinationGeo) }))
     .sort((a, b) => a.dist - b.dist)
@@ -269,13 +268,31 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
 }
 
 function buildRouteSampleCenters(originGeo, destinationGeo) {
-  return [
-    originGeo,
-    interpolate(originGeo, destinationGeo, 0.33),
-    interpolate(originGeo, destinationGeo, 0.5),
-    interpolate(originGeo, destinationGeo, 0.66),
-    destinationGeo,
-  ];
+  const points = [0, 0.12, 0.24, 0.36, 0.5, 0.64, 0.76, 0.88, 1]
+    .map((ratio) => interpolate(originGeo, destinationGeo, ratio));
+
+  return points;
+}
+
+async function buildTownAnchorsFromCenters(centers) {
+  const settled = await Promise.allSettled(centers.map((c) => reverseLookup(c.lat, c.lon)));
+  const anchors = [];
+
+  settled.forEach((res, idx) => {
+    if (res.status !== 'fulfilled') return;
+    const near = res.value?.near;
+    if (!near) return;
+    anchors.push({
+      name: near,
+      lat: centers[idx].lat,
+      lon: centers[idx].lon,
+      type: 'city',
+      source: 'town_anchor',
+      tags: { place: 'town' },
+    });
+  });
+
+  return anchors;
 }
 
 async function fetchOverpassPois(center, radius, { includeFood, includeParks }) {
@@ -288,7 +305,11 @@ async function fetchOverpassPois(center, radius, { includeFood, includeParks }) 
       nwr(around:${radius},${center.lat},${center.lon})[tourism=camp_site];
     `
     : '';
-  const foodQuery = includeFood ? `nwr(around:${radius},${center.lat},${center.lon})[amenity=restaurant];` : '';
+  const foodQuery = includeFood
+    ? `nwr(around:${radius},${center.lat},${center.lon})[amenity=restaurant];
+      nwr(around:${radius},${center.lat},${center.lon})[amenity=cafe];
+      nwr(around:${radius},${center.lat},${center.lon})[amenity=fast_food];`
+    : '';
 
   const query = `[out:json][timeout:20];(${parksQuery}${foodQuery}
       nwr(around:${radius},${center.lat},${center.lon})[tourism=attraction];
@@ -300,7 +321,7 @@ async function fetchOverpassPois(center, radius, { includeFood, includeParks }) 
       nwr(around:${radius},${center.lat},${center.lon})[amenity=arts_centre];
       nwr(around:${radius},${center.lat},${center.lon})[historic];
       nwr(around:${radius},${center.lat},${center.lon})[natural];
-      nwr(around:${radius},${center.lat},${center.lon})[place~"city|town|village"];
+      nwr(around:${radius},${center.lat},${center.lon})[place~"city|town|village|hamlet|suburb|locality"];
     ); out center 220;`;
 
   const response = await fetchWithRetry(overpassBase, {
@@ -456,7 +477,7 @@ function estimateSleepMinutes(windowMinutes) {
 }
 
 function scorePoi(poi, priorities) {
-  const sourceWeight = poi.source === 'overpass' ? 1.8 : poi.source === 'wikipedia' ? 1.3 : 0.75;
+  const sourceWeight = poi.source === 'overpass' ? 1.85 : poi.source === 'wikipedia' ? 1.3 : poi.source === 'town_anchor' ? 1.1 : 0.72;
   const weights = normalizedPriorityWeights(priorities);
 
   const scenicQuality = scenicQualityScore(poi);
@@ -468,13 +489,22 @@ function scorePoi(poi, priorities) {
     weights.thingsToDo * thingsQuality +
     weights.food * foodQuality;
 
-  return sourceWeight * blended;
+  const bucket = priorityBucket(poi);
+  const bucketWeight = bucket === 'scenic' ? weights.scenic : bucket === 'things' ? weights.thingsToDo : weights.food;
+  const priorityPush = 0.85 + bucketWeight * 2.4;
+
+  const oppositePenalty =
+    bucket === 'food' ? (weights.food < 0.15 ? 0.82 : 1)
+      : bucket === 'things' ? (weights.thingsToDo < 0.15 ? 0.86 : 1)
+      : (weights.scenic < 0.15 ? 0.86 : 1);
+
+  return sourceWeight * blended * priorityPush * oppositePenalty;
 }
 
 function normalizedPriorityWeights(priorities) {
-  const scenic = Math.pow(Math.max(0, priorities.scenic) / 100, 1.45);
-  const thingsToDo = Math.pow(Math.max(0, priorities.thingsToDo) / 100, 1.45);
-  const food = Math.pow(Math.max(0, priorities.food) / 100, 1.45);
+  const scenic = Math.pow(Math.max(0, priorities.scenic) / 100, 2.1);
+  const thingsToDo = Math.pow(Math.max(0, priorities.thingsToDo) / 100, 2.1);
+  const food = Math.pow(Math.max(0, priorities.food) / 100, 2.1);
   const base = { scenic, thingsToDo, food };
   const total = base.scenic + base.thingsToDo + base.food;
   if (total === 0) return { scenic: 1 / 3, thingsToDo: 1 / 3, food: 1 / 3 };
@@ -503,9 +533,9 @@ function scenicQualityScore(poi) {
 
 function thingsToDoQualityScore(poi) {
   const byType = {
-    museum: 2.05,
-    historic: 1.9,
-    activity: 1.85,
+    museum: 2.2,
+    historic: 2.0,
+    activity: 1.95,
     landmark: 1.7,
     city: 1.55,
     park: 1.3,
@@ -668,7 +698,7 @@ async function fetchWithRetry(url, init, maxAttempts = 3) {
 }
 
 function classifyPoi(tags) {
-  if (tags.amenity === 'restaurant' || tags.cuisine) return 'food';
+  if (tags.amenity === 'restaurant' || tags.amenity === 'cafe' || tags.amenity === 'fast_food' || tags.cuisine) return 'food';
   if (tags.tourism === 'camp_site') return 'campground';
   if (tags.tourism === 'museum') return 'museum';
   if (tags.tourism === 'gallery' || tags.amenity === 'arts_centre' || tags.amenity === 'theatre' || tags.tourism === 'zoo' || tags.tourism === 'theme_park') return 'activity';

@@ -103,3 +103,5 @@ progress {
 .actions { display: flex; gap: 0.65rem; flex-wrap: wrap; }
 #status { color: #ffd4d4; background: #402231; border-color: #65344a; }
 #loadingText { color: var(--good); }
+
+footer p { color: var(--muted); font-size: 0.92rem; text-align: center; margin-top: 1rem; }
