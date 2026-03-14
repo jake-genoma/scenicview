@@ -222,7 +222,8 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
     includeParks: true,
   });
 
-  const ranked = rankCandidates(candidatePool, options.priorities);
+  const liveCandidates = candidatePool.filter((poi) => poi.source !== 'fallback');
+  const ranked = rankCandidates(liveCandidates.length >= 12 ? liveCandidates : candidatePool, options.priorities);
 
   const sleepMinutes = estimateSleepMinutes(availableMinutes);
   const effectiveAvailable = Math.max(0, availableMinutes - sleepMinutes);
@@ -253,16 +254,25 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
   const wikiCalls = centers.filter((_, idx) => idx % 2 === 1).map((center) => fetchWikipediaPois(center, Math.round(baseRadius * 2.1)));
   const townAnchorsCall = buildTownAnchorsFromCenters(centers);
 
-  const settled = await Promise.allSettled([...categoryCalls, ...wikiCalls, townAnchorsCall]);
+  // Additional open-data enrichment to expand smaller-town and local venue coverage.
+  const nominatimCalls = centers.flatMap((center) => [
+    fetchNominatimCategory(center, 'food', baseRadius),
+    fetchNominatimCategory(center, 'things', baseRadius),
+    fetchNominatimCategory(center, 'scenic', baseRadius),
+  ]);
+
+  const settled = await Promise.allSettled([...categoryCalls, ...wikiCalls, townAnchorsCall, ...nominatimCalls]);
   const live = [];
   settled.forEach((res) => {
     if (res.status === 'fulfilled') live.push(...res.value);
   });
 
   const liveDeduped = dedupePois(live).filter((poi) => isInContinentalNorthAmerica(poi));
-  if (liveDeduped.length >= 34) return liveDeduped;
 
-  const needed = Math.max(10, 34 - liveDeduped.length);
+  // Prefer live data; only use fallback when live discovery is truly sparse.
+  if (liveDeduped.length >= 8) return liveDeduped;
+
+  const needed = Math.max(6, 14 - liveDeduped.length);
   const nearestFallback = FALLBACK_POI_CATALOG
     .map((poi) => ({ ...poi, dist: distanceToSegmentKm(poi, originGeo, destinationGeo) }))
     .sort((a, b) => a.dist - b.dist)
@@ -364,6 +374,55 @@ async function fetchOverpassCategory(center, radius, category, enabled = true) {
       };
     })
     .filter(Boolean);
+}
+
+async function fetchNominatimCategory(center, category, radius) {
+  const deltaLon = radius / (111000 * Math.cos(toRad(Math.max(-80, Math.min(80, center.lat)))));
+  const deltaLat = radius / 111000;
+  const viewbox = [
+    center.lon - deltaLon,
+    center.lat + deltaLat,
+    center.lon + deltaLon,
+    center.lat - deltaLat,
+  ].join(',');
+
+  const qByCategory = {
+    food: 'restaurant cafe diner food',
+    things: 'museum gallery historic attraction theater arts center',
+    scenic: 'viewpoint scenic park natural reserve',
+  };
+
+  const params = new URLSearchParams({
+    q: qByCategory[category] || 'attraction',
+    format: 'jsonv2',
+    limit: '30',
+    addressdetails: '1',
+    viewbox,
+    bounded: '1',
+  });
+
+  const response = await fetchWithRetry(`${nominatimSearchBase}?${params}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+  }, 2);
+
+  const rows = await response.json();
+  return (rows || []).map((row) => {
+    const name = row.name || row.display_name?.split(',')[0] || 'Local place';
+    const tags = {
+      amenity: row.type,
+      tourism: row.class,
+      place: row.type,
+    };
+    return {
+      name,
+      lat: Number(row.lat),
+      lon: Number(row.lon),
+      type: classifyPoi(tags),
+      tags,
+      source: 'nominatim',
+    };
+  }).filter((x) => Number.isFinite(x.lat) && Number.isFinite(x.lon));
 }
 
 async function fetchWikipediaPois(center, radius) {
@@ -494,7 +553,7 @@ function estimateSleepMinutes(windowMinutes) {
 }
 
 function scorePoi(poi, priorities) {
-  const sourceWeight = poi.source === 'overpass' ? 1.85 : poi.source === 'wikipedia' ? 1.3 : poi.source === 'town_anchor' ? 1.1 : 0.72;
+  const sourceWeight = poi.source === 'overpass' ? 1.9 : poi.source === 'nominatim' ? 1.45 : poi.source === 'wikipedia' ? 1.3 : poi.source === 'town_anchor' ? 1.12 : 0.45;
   const weights = normalizedPriorityWeights(priorities);
 
   const scenicQuality = scenicQualityScore(poi);
@@ -573,11 +632,20 @@ function classifyVisitStyle(type) {
 }
 
 async function enrichDescriptions(selected) {
-  const settled = await Promise.allSettled(selected.map((poi) => reverseLookup(poi.lat, poi.lon)));
-  return selected.map((poi, i) => ({ ...poi, description: buildDescription(poi, settled[i].status === 'fulfilled' ? settled[i].value : null) }));
+  const reverseSettled = await Promise.allSettled(selected.map((poi) => reverseLookup(poi.lat, poi.lon)));
+  const summarySettled = await Promise.allSettled(selected.map((poi) => fetchWikiSummaryForTitle(poi.name)));
+
+  return selected.map((poi, i) => ({
+    ...poi,
+    description: buildDescription(
+      poi,
+      reverseSettled[i].status === 'fulfilled' ? reverseSettled[i].value : null,
+      summarySettled[i].status === 'fulfilled' ? summarySettled[i].value : null,
+    ),
+  }));
 }
 
-function buildDescription(poi, reverse) {
+function buildDescription(poi, reverse, wikiSummary) {
   const near = reverse?.near ? ` near ${reverse.near}` : '';
   const country = reverse?.country ? ` in ${reverse.country}` : '';
   const minStayText = poi.minStayMinutes ? ` Minimum recommended stay: ${Math.round(poi.minStayMinutes / 60)}-${Math.round((poi.minStayMinutes + 120) / 60)}h.` : '';
@@ -593,7 +661,23 @@ function buildDescription(poi, reverse) {
     natural: 'Natural feature stop with outdoors appeal.',
     landmark: 'Notable attraction that adds variety to the route.',
   }[poi.type] || 'Interesting stop along your route.';
-  return `${typeText}${near}${country} Recommended stop: about ${poi.estimatedStopMinutes} min.${minStayText}`;
+  const details = wikiSummary ? ` ${wikiSummary}` : '';
+  return `${typeText}${near}${country}${details} Recommended stop: about ${poi.estimatedStopMinutes} min.${minStayText}`;
+}
+
+async function fetchWikiSummaryForTitle(title) {
+  if (!title || title.length < 3) return '';
+  const safeTitle = encodeURIComponent(title.replace(/\s+/g, '_'));
+  const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${safeTitle}`;
+  try {
+    const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } }, 1);
+    const json = await response.json();
+    const extract = (json.extract || '').trim();
+    if (!extract) return '';
+    return extract.length > 180 ? `${extract.slice(0, 177)}...` : extract;
+  } catch {
+    return '';
+  }
 }
 
 async function reverseLookup(lat, lon) {
