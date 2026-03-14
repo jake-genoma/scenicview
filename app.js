@@ -272,23 +272,29 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
 }
 
 async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood, includeParks }) {
-  const centers = buildRouteSampleCenters(originGeo, destinationGeo);
-  const baseRadius = Math.round(14000 + scenicness * 500);
+  const distanceKm = haversineKm(originGeo, destinationGeo);
+  const tuning = buildDiscoveryTuning(distanceKm, scenicness);
+  const centers = buildRouteSampleCenters(originGeo, destinationGeo, tuning);
 
   const categoryCalls = centers.flatMap((center) => [
-    fetchOverpassCategory(center, baseRadius, 'scenic', includeParks),
-    fetchOverpassCategory(center, baseRadius, 'things'),
-    fetchOverpassCategory(center, baseRadius, 'food', includeFood),
+    fetchOverpassCategory(center, tuning.baseRadius, 'scenic', includeParks),
+    fetchOverpassCategory(center, tuning.baseRadius, 'things'),
+    fetchOverpassCategory(center, tuning.baseRadius, 'food', includeFood),
   ]);
 
-  const wikiCalls = centers.filter((_, idx) => idx % 2 === 1).map((center) => fetchWikipediaPois(center, Math.round(baseRadius * 2.1)));
+  const wikiCalls = centers
+    .filter((_, idx) => idx % tuning.wikiStride === 1)
+    .map((center) => fetchWikipediaPois(center, tuning.wikiRadius));
   const townAnchorsCall = buildTownAnchorsFromCenters(centers);
 
   // Additional open-data enrichment to expand smaller-town and local venue coverage.
-  const nominatimCalls = centers.filter((_, idx) => idx % 2 === 1).flatMap((center) => [
-    fetchNominatimCategory(center, 'food', Math.round(baseRadius * 0.85)),
-    fetchNominatimCategory(center, 'things', Math.round(baseRadius * 0.85)),
-  ]);
+  const nominatimCalls = centers
+    .filter((_, idx) => idx % tuning.nominatimStride === 1)
+    .flatMap((center) => [
+      fetchNominatimCategory(center, 'food', tuning.nominatimRadius, distanceKm >= 1500 ? 55 : 45),
+      fetchNominatimCategory(center, 'things', tuning.nominatimRadius, distanceKm >= 1500 ? 55 : 45),
+      fetchNominatimCategory(center, 'scenic', Math.round(tuning.nominatimRadius * 0.95), distanceKm >= 1500 ? 45 : 35),
+    ]);
 
   const settled = await Promise.allSettled([...categoryCalls, ...wikiCalls, townAnchorsCall, ...nominatimCalls]);
   const live = [];
@@ -298,10 +304,10 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
 
   const liveDeduped = dedupePois(live).filter((poi) => isInContinentalNorthAmerica(poi));
 
-  // Prefer live data; only use fallback when live discovery is truly sparse.
-  if (liveDeduped.length >= 10) return liveDeduped;
+  const minLiveBeforeFallback = distanceKm >= 1800 ? 22 : distanceKm >= 500 ? 16 : 12;
+  if (liveDeduped.length >= minLiveBeforeFallback) return liveDeduped;
 
-  const needed = Math.max(6, 14 - liveDeduped.length);
+  const needed = Math.max(8, tuning.fallbackCount - liveDeduped.length);
   const nearestFallback = FALLBACK_POI_CATALOG
     .map((poi) => ({ ...poi, dist: distanceToSegmentKm(poi, originGeo, destinationGeo) }))
     .sort((a, b) => a.dist - b.dist)
@@ -311,21 +317,69 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
   return dedupePois([...liveDeduped, ...nearestFallback]);
 }
 
-function buildRouteSampleCenters(originGeo, destinationGeo) {
-  const points = [0, 0.25, 0.5, 0.75, 1]
-    .map((ratio) => interpolate(originGeo, destinationGeo, ratio))
-    .map((p, i) => (i === 0 || i === 4 ? p : jitterPointNearRoute(p, originGeo, destinationGeo)));
-
-  return points;
+function buildDiscoveryTuning(distanceKm, scenicness) {
+  const shortTripFactor = distanceKm < 260 ? 1 - distanceKm / 260 : 0;
+  const longTripFactor = clamp(distanceKm / 3000, 0, 1);
+  return {
+    sampleCount: Math.round(clamp(5 + distanceKm / 360, 5, 15)),
+    baseRadius: Math.round(clamp(15000 + scenicness * 550 + shortTripFactor * 16000 + longTripFactor * 6000, 13000, 43000)),
+    nominatimRadius: Math.round(clamp(16000 + scenicness * 420 + shortTripFactor * 12000 + longTripFactor * 3000, 13000, 36000)),
+    wikiRadius: Math.round(clamp(28000 + scenicness * 700 + shortTripFactor * 22000 + longTripFactor * 12000, 24000, 90000)),
+    jitterKm: clamp(7 + distanceKm * 0.018, 6, 44),
+    localExploreKm: shortTripFactor > 0 ? Math.round(18 + shortTripFactor * 30) : 0,
+    wikiStride: distanceKm >= 2500 ? 3 : 2,
+    nominatimStride: distanceKm >= 1800 ? 3 : 2,
+    fallbackCount: Math.round(clamp(10 + distanceKm / 320, 10, 30)),
+  };
 }
 
-function jitterPointNearRoute(point, originGeo, destinationGeo) {
-  const maxJitterKm = Math.max(4, Math.min(18, haversineKm(originGeo, destinationGeo) * 0.06));
+function buildRouteSampleCenters(originGeo, destinationGeo, tuning) {
+  const points = [];
+  const sampleCount = Math.max(2, tuning.sampleCount);
+
+  for (let i = 0; i < sampleCount; i += 1) {
+    const ratio = sampleCount === 1 ? 0 : i / (sampleCount - 1);
+    const point = interpolate(originGeo, destinationGeo, ratio);
+    points.push(i === 0 || i === sampleCount - 1 ? point : jitterPointNearRoute(point, tuning.jitterKm));
+  }
+
+  if (tuning.localExploreKm > 0) {
+    const mid = interpolate(originGeo, destinationGeo, 0.5);
+    [20, 110, 200, 290].forEach((bearing) => {
+      points.push(offsetPointByKm(mid, tuning.localExploreKm, bearing));
+    });
+  }
+
+  return dedupeCenters(points);
+}
+
+function dedupeCenters(points) {
+  const seen = new Set();
+  return points.filter((p) => {
+    const key = `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function jitterPointNearRoute(point, maxJitterKm) {
   const dx = (Math.random() * 2 - 1) * maxJitterKm;
   const dy = (Math.random() * 2 - 1) * maxJitterKm;
   const lat = point.lat + dy / 111;
   const lon = point.lon + dx / (111 * Math.cos(toRad(Math.max(-85, Math.min(85, point.lat)))));
   return { lat, lon };
+}
+
+function offsetPointByKm(point, distanceKm, bearingDeg) {
+  const brng = toRad(bearingDeg);
+  const latDelta = (distanceKm * Math.cos(brng)) / 111;
+  const lonDenominator = 111 * Math.cos(toRad(Math.max(-85, Math.min(85, point.lat))));
+  const lonDelta = lonDenominator ? (distanceKm * Math.sin(brng)) / lonDenominator : 0;
+  return {
+    lat: point.lat + latDelta,
+    lon: point.lon + lonDelta,
+  };
 }
 
 async function buildTownAnchorsFromCenters(centers) {
@@ -405,7 +459,7 @@ async function fetchOverpassCategory(center, radius, category, enabled = true) {
     .filter(Boolean);
 }
 
-async function fetchNominatimCategory(center, category, radius) {
+async function fetchNominatimCategory(center, category, radius, limit = 40) {
   const deltaLon = radius / (111000 * Math.cos(toRad(Math.max(-80, Math.min(80, center.lat)))));
   const deltaLat = radius / 111000;
   const viewbox = [
@@ -424,7 +478,7 @@ async function fetchNominatimCategory(center, category, radius) {
   const params = new URLSearchParams({
     q: qByCategory[category] || 'attraction',
     format: 'jsonv2',
-    limit: '30',
+    limit: String(limit),
     addressdetails: '1',
     viewbox,
     bounded: '1',
@@ -738,7 +792,7 @@ function buildDescription(poi, reverse, wikiSummary) {
   }[poi.type] || 'Interesting stop along your route.';
   const foodDetails = poi.type === 'food' ? buildFoodDetails(poi) : '';
   const details = wikiSummary ? ` ${wikiSummary}` : '';
-  return `${typeText}${foodDetails}${near}${country}${details} Recommended stop: about ${poi.estimatedStopMinutes} min.${minStayText}`;
+  return `${typeText}${foodDetails}${near}${country}${details} Recommended stop: about ${formatMinutesHuman(poi.estimatedStopMinutes)}.${minStayText}`;
 }
 
 function buildFoodDetails(poi) {
@@ -849,13 +903,13 @@ function renderPlan(ctx) {
     origin, destination, isRoundTrip, outboundTiming, returnTiming, preferredStops, selected,
   } = ctx;
 
-  const outboundSummary = `Outbound: window ${outboundTiming.windowMinutes} min, direct ~${outboundTiming.directMinutes}, drive with stops ~${outboundTiming.driveWithStopsMinutes}, stop time ~${outboundTiming.stopMinutes}, sleep reserve ~${outboundTiming.sleepMinutes}, used ${outboundTiming.usedMinutes}, remaining ${outboundTiming.slackMinutes} min`;
+  const outboundSummary = `Outbound: window ${formatMinutesHuman(outboundTiming.windowMinutes)}, direct ~${formatMinutesHuman(outboundTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(outboundTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(outboundTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(outboundTiming.sleepMinutes)}, used ${formatMinutesHuman(outboundTiming.usedMinutes)}, remaining ${formatMinutesSigned(outboundTiming.slackMinutes)}`;
 
   if (isRoundTrip) {
-    const returnSummary = `Return: window ${returnTiming.windowMinutes} min, direct ~${returnTiming.directMinutes}, drive with stops ~${returnTiming.driveWithStopsMinutes}, stop time ~${returnTiming.stopMinutes}, sleep reserve ~${returnTiming.sleepMinutes}, used ${returnTiming.usedMinutes}, remaining ${returnTiming.slackMinutes} min`;
+    const returnSummary = `Return: window ${formatMinutesHuman(returnTiming.windowMinutes)}, direct ~${formatMinutesHuman(returnTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(returnTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(returnTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(returnTiming.sleepMinutes)}, used ${formatMinutesHuman(returnTiming.usedMinutes)}, remaining ${formatMinutesSigned(returnTiming.slackMinutes)}`;
     const totalWindow = outboundTiming.windowMinutes + returnTiming.windowMinutes;
     const totalUsed = outboundTiming.usedMinutes + returnTiming.usedMinutes;
-    timingSummary.textContent = `Round trip planned. ${outboundSummary}. ${returnSummary}. Combined used ${totalUsed}/${totalWindow} min (remaining ${totalWindow - totalUsed} min). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    timingSummary.textContent = `Round trip planned. ${outboundSummary}. ${returnSummary}. Combined used ${formatMinutesHuman(totalUsed)}/${formatMinutesHuman(totalWindow)} (remaining ${formatMinutesSigned(totalWindow - totalUsed)}). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   } else {
     timingSummary.textContent = `One-way trip planned. ${outboundSummary}. Stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   }
@@ -1002,6 +1056,20 @@ function setLoading(active, pct = 0, text = 'Working...') {
 }
 
 function toRad(deg) { return (deg * Math.PI) / 180; }
+function formatMinutesHuman(totalMinutes) {
+  const minutes = Math.max(0, Math.round(totalMinutes || 0));
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours === 0) return `${remainingMinutes}m`;
+  if (remainingMinutes === 0) return `${hours}h`;
+  return `${hours}h ${remainingMinutes}m`;
+}
+
+function formatMinutesSigned(totalMinutes) {
+  const sign = totalMinutes < 0 ? '-' : '';
+  return `${sign}${formatMinutesHuman(Math.abs(totalMinutes))}`;
+}
+
 function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
