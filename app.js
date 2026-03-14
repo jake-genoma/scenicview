@@ -462,7 +462,7 @@ function rankCandidates(candidates, priorities) {
 async function planStopsWithinTime({ ranked, originGeo, destinationGeo, availableMinutes, stopTime, preferredCapped, priorities }) {
   const selected = [];
   const weights = normalizedPriorityWeights(priorities);
-  const desiredMix = desiredBucketCounts(preferredCapped, weights);
+  const desiredMix = prioritizeFoodMix(desiredBucketCounts(preferredCapped, weights), preferredCapped, priorities.food, ranked);
 
   for (const candidate of ranked) {
     if (selected.length >= preferredCapped || selected.length >= MAX_STOPS) break;
@@ -530,6 +530,30 @@ function desiredBucketCounts(stopCount, weights) {
   return out;
 }
 
+
+function prioritizeFoodMix(baseMix, stopCount, foodPriority, ranked) {
+  const out = { ...baseMix };
+  const foodCandidates = ranked.filter((poi) => priorityBucket(poi) === 'food').length;
+  if (foodCandidates === 0 || stopCount <= 0 || foodPriority < 65) return out;
+
+  let targetFood = out.food;
+  if (foodPriority >= 90) targetFood = Math.max(targetFood, Math.ceil(stopCount * 0.6));
+  else if (foodPriority >= 80) targetFood = Math.max(targetFood, Math.ceil(stopCount * 0.5));
+  else targetFood = Math.max(targetFood, Math.ceil(stopCount * 0.4));
+
+  if (foodPriority >= 70 && stopCount >= 2) targetFood = Math.max(targetFood, 1);
+  targetFood = Math.min(targetFood, foodCandidates, stopCount);
+
+  while (out.food < targetFood) {
+    if (out.scenic >= out.things && out.scenic > 0) out.scenic -= 1;
+    else if (out.things > 0) out.things -= 1;
+    else break;
+    out.food += 1;
+  }
+
+  return out;
+}
+
 function priorityBucket(poi) {
   if (poi.type === 'food') return 'food';
   if (['museum', 'historic', 'activity', 'city', 'landmark'].includes(poi.type)) return 'things';
@@ -579,7 +603,12 @@ function scorePoi(poi, priorities) {
       : bucket === 'things' ? (weights.thingsToDo < 0.15 ? 0.86 : 1)
       : (weights.scenic < 0.15 ? 0.86 : 1);
 
-  return sourceWeight * blended * priorityPush * oppositePenalty;
+  const foodIntentBoost = poi.type === 'food'
+    ? (priorities.food >= 85 ? 1.45 : priorities.food >= 70 ? 1.25 : 1)
+    : 1;
+  const nonFoodDampener = poi.type !== 'food' && priorities.food >= 85 ? 0.88 : 1;
+
+  return sourceWeight * blended * priorityPush * oppositePenalty * foodIntentBoost * nonFoodDampener;
 }
 
 function normalizedPriorityWeights(priorities) {
@@ -669,7 +698,7 @@ function buildDescription(poi, reverse, wikiSummary) {
     viewpoint: 'Scenic viewpoint with strong photo value.',
     park: 'Park/recreation area suitable for hikes and nature exploration.',
     campground: 'Campground-style stop suitable for longer overnights.',
-    food: 'Restaurant stop selected to fit your scenic preference level.',
+    food: 'Food stop selected to match your food priority.',
     city: 'Town/city area with local character and services.',
     museum: 'Museum stop with curated exhibits and local culture.',
     activity: 'Activity-focused stop (gallery, theater, zoo, or attraction).',
@@ -677,8 +706,23 @@ function buildDescription(poi, reverse, wikiSummary) {
     natural: 'Natural feature stop with outdoors appeal.',
     landmark: 'Notable attraction that adds variety to the route.',
   }[poi.type] || 'Interesting stop along your route.';
+  const foodDetails = poi.type === 'food' ? buildFoodDetails(poi) : '';
   const details = wikiSummary ? ` ${wikiSummary}` : '';
-  return `${typeText}${near}${country}${details} Recommended stop: about ${poi.estimatedStopMinutes} min.${minStayText}`;
+  return `${typeText}${foodDetails}${near}${country}${details} Recommended stop: about ${poi.estimatedStopMinutes} min.${minStayText}`;
+}
+
+function buildFoodDetails(poi) {
+  const tags = poi.tags || {};
+  const cuisine = (tags.cuisine || '').replace(/;/g, ', ');
+  const amenity = tags.amenity || '';
+  const opening = tags.opening_hours || '';
+  const takeaway = tags.takeaway === 'yes' ? ' Takeaway available.' : '';
+  const website = tags.website || tags['contact:website'] || '';
+  const cuisineText = cuisine ? ` Cuisine: ${cuisine}.` : '';
+  const amenityText = amenity && !/restaurant|cafe|fast_food/i.test(amenity) ? ` Type: ${amenity}.` : '';
+  const hoursText = opening ? ` Hours: ${opening}.` : '';
+  const websiteText = website ? ` Website: ${website}.` : '';
+  return `${cuisineText}${amenityText}${hoursText}${takeaway}${websiteText}`;
 }
 
 async function fetchWikiSummaryForTitle(title) {
