@@ -242,19 +242,24 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
 
 async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood, includeParks }) {
   const centers = buildRouteSampleCenters(originGeo, destinationGeo);
-  const baseRadius = Math.round(15000 + scenicness * 450);
+  const baseRadius = Math.round(14000 + scenicness * 500);
 
-  const overpassCalls = centers.map((center) => fetchOverpassPois(center, baseRadius, { includeFood, includeParks }));
-  const wikiCalls = centers.slice(1, 2).map((center) => fetchWikipediaPois(center, Math.round(baseRadius * 2.2)));
+  const categoryCalls = centers.flatMap((center) => [
+    fetchOverpassCategory(center, baseRadius, 'scenic', includeParks),
+    fetchOverpassCategory(center, baseRadius, 'things'),
+    fetchOverpassCategory(center, baseRadius, 'food', includeFood),
+  ]);
 
-  const settled = await Promise.allSettled([...overpassCalls, ...wikiCalls]);
+  const wikiCalls = centers.filter((_, idx) => idx % 2 === 1).map((center) => fetchWikipediaPois(center, Math.round(baseRadius * 2.1)));
+  const townAnchorsCall = buildTownAnchorsFromCenters(centers);
+
+  const settled = await Promise.allSettled([...categoryCalls, ...wikiCalls, townAnchorsCall]);
   const live = [];
   settled.forEach((res) => {
     if (res.status === 'fulfilled') live.push(...res.value);
   });
 
   const liveDeduped = dedupePois(live).filter((poi) => isInContinentalNorthAmerica(poi));
-
   if (liveDeduped.length >= 34) return liveDeduped;
 
   const needed = Math.max(10, 34 - liveDeduped.length);
@@ -269,9 +274,19 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
 
 function buildRouteSampleCenters(originGeo, destinationGeo) {
   const points = [0, 0.12, 0.24, 0.36, 0.5, 0.64, 0.76, 0.88, 1]
-    .map((ratio) => interpolate(originGeo, destinationGeo, ratio));
+    .map((ratio) => interpolate(originGeo, destinationGeo, ratio))
+    .map((p) => jitterPointNearRoute(p, originGeo, destinationGeo));
 
   return points;
+}
+
+function jitterPointNearRoute(point, originGeo, destinationGeo) {
+  const maxJitterKm = Math.max(8, Math.min(40, haversineKm(originGeo, destinationGeo) * 0.12));
+  const dx = (Math.random() * 2 - 1) * maxJitterKm;
+  const dy = (Math.random() * 2 - 1) * maxJitterKm;
+  const lat = point.lat + dy / 111;
+  const lon = point.lon + dx / (111 * Math.cos(toRad(Math.max(-85, Math.min(85, point.lat)))));
+  return { lat, lon };
 }
 
 async function buildTownAnchorsFromCenters(centers) {
@@ -295,23 +310,19 @@ async function buildTownAnchorsFromCenters(centers) {
   return anchors;
 }
 
-async function fetchOverpassPois(center, radius, { includeFood, includeParks }) {
-  const parksQuery = includeParks
-    ? `
+async function fetchOverpassCategory(center, radius, category, enabled = true) {
+  if (!enabled) return [];
+
+  const queryByCategory = {
+    scenic: `
       nwr(around:${radius},${center.lat},${center.lon})[leisure=park];
       nwr(around:${radius},${center.lat},${center.lon})[boundary=national_park];
       nwr(around:${radius},${center.lat},${center.lon})[boundary=protected_area];
       nwr(around:${radius},${center.lat},${center.lon})[tourism=viewpoint];
       nwr(around:${radius},${center.lat},${center.lon})[tourism=camp_site];
-    `
-    : '';
-  const foodQuery = includeFood
-    ? `nwr(around:${radius},${center.lat},${center.lon})[amenity=restaurant];
-      nwr(around:${radius},${center.lat},${center.lon})[amenity=cafe];
-      nwr(around:${radius},${center.lat},${center.lon})[amenity=fast_food];`
-    : '';
-
-  const query = `[out:json][timeout:20];(${parksQuery}${foodQuery}
+      nwr(around:${radius},${center.lat},${center.lon})[natural];
+    `,
+    things: `
       nwr(around:${radius},${center.lat},${center.lon})[tourism=attraction];
       nwr(around:${radius},${center.lat},${center.lon})[tourism=museum];
       nwr(around:${radius},${center.lat},${center.lon})[tourism=gallery];
@@ -320,10 +331,16 @@ async function fetchOverpassPois(center, radius, { includeFood, includeParks }) 
       nwr(around:${radius},${center.lat},${center.lon})[amenity=theatre];
       nwr(around:${radius},${center.lat},${center.lon})[amenity=arts_centre];
       nwr(around:${radius},${center.lat},${center.lon})[historic];
-      nwr(around:${radius},${center.lat},${center.lon})[natural];
       nwr(around:${radius},${center.lat},${center.lon})[place~"city|town|village|hamlet|suburb|locality"];
-    ); out center 220;`;
+    `,
+    food: `
+      nwr(around:${radius},${center.lat},${center.lon})[amenity=restaurant];
+      nwr(around:${radius},${center.lat},${center.lon})[amenity=cafe];
+      nwr(around:${radius},${center.lat},${center.lon})[amenity=fast_food];
+    `,
+  };
 
+  const query = `[out:json][timeout:20];(${queryByCategory[category] || ''}); out center 220;`;
   const response = await fetchWithRetry(overpassBase, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
@@ -502,17 +519,8 @@ function scorePoi(poi, priorities) {
 }
 
 function normalizedPriorityWeights(priorities) {
-  const scenic = Math.pow(Math.max(0, priorities.scenic) / 100, 2.1);
-  const thingsToDo = Math.pow(Math.max(0, priorities.thingsToDo) / 100, 2.1);
-  const food = Math.pow(Math.max(0, priorities.food) / 100, 2.1);
-  const base = { scenic, thingsToDo, food };
-  const total = base.scenic + base.thingsToDo + base.food;
-  if (total === 0) return { scenic: 1 / 3, thingsToDo: 1 / 3, food: 1 / 3 };
-  return {
-    scenic: base.scenic / total,
-    thingsToDo: base.thingsToDo / total,
-    food: base.food / total,
-  };
+  // Equalized by request: all three sliders are treated equally in weighting.
+  return { scenic: 1 / 3, thingsToDo: 1 / 3, food: 1 / 3 };
 }
 
 function scenicQualityScore(poi) {
