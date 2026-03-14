@@ -139,14 +139,16 @@ form.addEventListener('submit', async (event) => {
 
     const outboundSleepMinutes = estimateSleepMinutes(outboundWindowMinutes);
     const returnSleepMinutes = isRoundTrip ? estimateSleepMinutes(returnWindowMinutes) : 0;
-    if (outboundDirectMinutes + outboundSleepMinutes > outboundWindowMinutes) {
+    const outboundSafetyReserve = estimateNightRutSafetyReserveMinutes(departAt, arriveBy);
+    const returnSafetyReserve = isRoundTrip ? estimateNightRutSafetyReserveMinutes(arriveBy, returnArriveBy) : 0;
+    if (outboundDirectMinutes + outboundSleepMinutes + outboundSafetyReserve > outboundWindowMinutes) {
       setLoading(false);
-      showStatus('Outbound window is too short once drive time and sleep reserve are included. Add more time or choose closer points.');
+      showStatus('Outbound window is too short once drive time, sleep reserve, and night/deer-risk reserve are included. Add more time or choose closer points.');
       return;
     }
-    if (isRoundTrip && returnDirectMinutes + returnSleepMinutes > returnWindowMinutes) {
+    if (isRoundTrip && returnDirectMinutes + returnSleepMinutes + returnSafetyReserve > returnWindowMinutes) {
       setLoading(false);
-      showStatus('Return window is too short once drive time and sleep reserve are included. Add more time or extend return arrival.');
+      showStatus('Return window is too short once drive time, sleep reserve, and night/deer-risk reserve are included. Add more time or extend return arrival.');
       return;
     }
 
@@ -196,6 +198,7 @@ form.addEventListener('submit', async (event) => {
       destinationGeo,
       windowMinutes: outboundWindowMinutes,
       sleepMinutes: outboundSleepMinutes,
+      safetyReserveMinutes: outboundSafetyReserve,
     });
     if (isRoundTrip) {
       returnStops = await fitStopsToWindow({
@@ -204,6 +207,7 @@ form.addEventListener('submit', async (event) => {
         destinationGeo: originGeo,
         windowMinutes: returnWindowMinutes,
         sleepMinutes: returnSleepMinutes,
+        safetyReserveMinutes: returnSafetyReserve,
       });
     }
 
@@ -213,6 +217,7 @@ form.addEventListener('submit', async (event) => {
       stops: outboundStops,
       windowMinutes: outboundWindowMinutes,
       sleepMinutes: outboundSleepMinutes,
+      safetyReserveMinutes: outboundSafetyReserve,
       directMinutes: outboundDirectMinutes,
     });
     const returnTiming = isRoundTrip
@@ -222,9 +227,10 @@ form.addEventListener('submit', async (event) => {
         stops: returnStops,
         windowMinutes: returnWindowMinutes,
         sleepMinutes: returnSleepMinutes,
+        safetyReserveMinutes: returnSafetyReserve,
         directMinutes: returnDirectMinutes,
       })
-      : { windowMinutes: 0, directMinutes: 0, driveWithStopsMinutes: 0, stopMinutes: 0, sleepMinutes: 0, usedMinutes: 0, slackMinutes: 0 };
+      : { windowMinutes: 0, directMinutes: 0, driveWithStopsMinutes: 0, stopMinutes: 0, sleepMinutes: 0, safetyReserveMinutes: 0, usedMinutes: 0, slackMinutes: 0 };
 
     const trimmedSelected = [...outboundStops, ...returnStops];
 
@@ -963,27 +969,67 @@ async function reverseLookup(lat, lon) {
   }
 }
 
-async function computeLegTiming({ originGeo, destinationGeo, stops, windowMinutes, sleepMinutes, directMinutes }) {
+function estimateNightRutSafetyReserveMinutes(startDate, endDate) {
+  if (!(startDate instanceof Date) || !(endDate instanceof Date)) return 0;
+  const startMs = startDate.getTime();
+  const endMs = endDate.getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 0;
+
+  const nightMinutes = estimateNightDrivingMinutes(startDate, endDate);
+  if (nightMinutes <= 0) return 0;
+
+  const rutBoost = isRutSeasonWindow(startDate, endDate) ? 1.35 : 1;
+  return Math.min(240, Math.round(nightMinutes * 0.35 * rutBoost));
+}
+
+function estimateNightDrivingMinutes(startDate, endDate) {
+  let cursor = new Date(startDate.getTime());
+  const endMs = endDate.getTime();
+  let minutes = 0;
+
+  while (cursor.getTime() < endMs) {
+    const next = new Date(Math.min(endMs, cursor.getTime() + 30 * 60000));
+    const h = cursor.getHours();
+    if (h >= 21 || h < 6) minutes += (next.getTime() - cursor.getTime()) / 60000;
+    cursor = next;
+  }
+
+  return Math.round(minutes);
+}
+
+function isRutSeasonWindow(startDate, endDate) {
+  let cursor = new Date(startDate.getTime());
+  const endMs = endDate.getTime();
+  while (cursor.getTime() < endMs) {
+    const month = cursor.getMonth() + 1;
+    if (month === 10 || month === 11) return true;
+    cursor = new Date(Math.min(endMs, cursor.getTime() + 24 * 60 * 60000));
+  }
+  return false;
+}
+
+async function computeLegTiming({ originGeo, destinationGeo, stops, windowMinutes, sleepMinutes, safetyReserveMinutes = 0, directMinutes }) {
   const driveWithStopsMinutes = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, stops);
   const stopMinutes = Math.round(stops.reduce((a, b) => a + b.estimatedStopMinutes, 0));
-  const usedMinutes = driveWithStopsMinutes + stopMinutes + sleepMinutes;
+  const usedMinutes = driveWithStopsMinutes + stopMinutes + sleepMinutes + safetyReserveMinutes;
   return {
     windowMinutes,
     directMinutes,
     driveWithStopsMinutes,
     stopMinutes,
     sleepMinutes,
+    safetyReserveMinutes,
     usedMinutes,
     slackMinutes: windowMinutes - usedMinutes,
   };
 }
 
-async function fitStopsToWindow({ stops, originGeo, destinationGeo, windowMinutes, sleepMinutes }) {
+async function fitStopsToWindow({ stops, originGeo, destinationGeo, windowMinutes, sleepMinutes, safetyReserveMinutes = 0 }) {
   const fitted = [...stops];
   while (fitted.length) {
     const driveMinutes = await estimateDriveMinutesForWaypoints(originGeo, destinationGeo, fitted);
     const stopMinutes = Math.round(fitted.reduce((sum, p) => sum + p.estimatedStopMinutes, 0));
-    if (driveMinutes + stopMinutes + sleepMinutes <= windowMinutes) break;
+    if (driveMinutes + stopMinutes + sleepMinutes + safetyReserveMinutes <= windowMinutes) break;
     fitted.pop();
   }
   return fitted;
@@ -994,10 +1040,10 @@ function renderPlan(ctx) {
     origin, destination, isRoundTrip, outboundTiming, returnTiming, preferredStops, selected,
   } = ctx;
 
-  const outboundSummary = `Outbound: window ${formatMinutesHuman(outboundTiming.windowMinutes)}, direct ~${formatMinutesHuman(outboundTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(outboundTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(outboundTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(outboundTiming.sleepMinutes)}, used ${formatMinutesHuman(outboundTiming.usedMinutes)}, remaining ${formatMinutesSigned(outboundTiming.slackMinutes)}`;
+  const outboundSummary = `Outbound: window ${formatMinutesHuman(outboundTiming.windowMinutes)}, direct ~${formatMinutesHuman(outboundTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(outboundTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(outboundTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(outboundTiming.sleepMinutes)}, wildlife/night reserve ~${formatMinutesHuman(outboundTiming.safetyReserveMinutes || 0)}, used ${formatMinutesHuman(outboundTiming.usedMinutes)}, remaining ${formatMinutesSigned(outboundTiming.slackMinutes)}`;
 
   if (isRoundTrip) {
-    const returnSummary = `Return: window ${formatMinutesHuman(returnTiming.windowMinutes)}, direct ~${formatMinutesHuman(returnTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(returnTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(returnTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(returnTiming.sleepMinutes)}, used ${formatMinutesHuman(returnTiming.usedMinutes)}, remaining ${formatMinutesSigned(returnTiming.slackMinutes)}`;
+    const returnSummary = `Return: window ${formatMinutesHuman(returnTiming.windowMinutes)}, direct ~${formatMinutesHuman(returnTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(returnTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(returnTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(returnTiming.sleepMinutes)}, wildlife/night reserve ~${formatMinutesHuman(returnTiming.safetyReserveMinutes || 0)}, used ${formatMinutesHuman(returnTiming.usedMinutes)}, remaining ${formatMinutesSigned(returnTiming.slackMinutes)}`;
     const totalWindow = outboundTiming.windowMinutes + returnTiming.windowMinutes;
     const totalUsed = outboundTiming.usedMinutes + returnTiming.usedMinutes;
     timingSummary.textContent = `Round trip planned. ${outboundSummary}. ${returnSummary}. Combined used ${formatMinutesHuman(totalUsed)}/${formatMinutesHuman(totalWindow)} (remaining ${formatMinutesSigned(totalWindow - totalUsed)}). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
