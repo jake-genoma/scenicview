@@ -255,13 +255,13 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
   const candidatePool = await buildPoiPool({
     originGeo: startGeo,
     destinationGeo: endGeo,
-    scenicness: options.priorities.scenic,
+    priorities: options.priorities,
     includeFood: true,
     includeParks: true,
   });
 
   const liveCandidates = candidatePool.filter((poi) => poi.source !== 'fallback');
-  const ranked = rankCandidates(liveCandidates.length >= 12 ? liveCandidates : candidatePool, options.priorities);
+  const ranked = rankCandidates(liveCandidates.length >= 12 ? liveCandidates : candidatePool, options.priorities, { originGeo: startGeo, destinationGeo: endGeo });
 
   const sleepMinutes = estimateSleepMinutes(availableMinutes);
   const effectiveAvailable = Math.max(0, availableMinutes - sleepMinutes);
@@ -281,9 +281,13 @@ async function planLeg({ startGeo, endGeo, availableMinutes, preferredStops, opt
   return selected.map((x) => ({ ...x, leg: legLabel }));
 }
 
-async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood, includeParks }) {
+async function buildPoiPool({ originGeo, destinationGeo, priorities, includeFood, includeParks }) {
+  const scenicness = clamp(Number(priorities?.scenic ?? 50), 0, 100);
+  const thingsPriority = clamp(Number(priorities?.thingsToDo ?? 50), 0, 100);
+  const foodPriority = clamp(Number(priorities?.food ?? 50), 0, 100);
+
   const distanceKm = haversineKm(originGeo, destinationGeo);
-  const tuning = buildDiscoveryTuning(distanceKm, scenicness);
+  const tuning = buildDiscoveryTuning(distanceKm, scenicness, thingsPriority, foodPriority);
   const centers = buildRouteSampleCenters(originGeo, destinationGeo, tuning);
 
   const categoryCalls = centers.flatMap((center) => [
@@ -298,11 +302,16 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
   const townAnchorsCall = buildTownAnchorsFromCenters(centers);
 
   // Additional open-data enrichment to expand smaller-town and local venue coverage.
+  const foodLimit = distanceKm >= 1500 ? 55 : 45;
+  const thingsLimit = distanceKm >= 1500 ? 55 : 45;
+  const boostedFoodLimit = Math.round(foodLimit + (foodPriority / 100) * 20);
+  const boostedThingsLimit = Math.round(thingsLimit + (thingsPriority / 100) * 20);
+
   const nominatimCalls = centers
     .filter((_, idx) => idx % tuning.nominatimStride === 1)
     .flatMap((center) => [
-      fetchNominatimCategory(center, 'food', tuning.nominatimRadius, distanceKm >= 1500 ? 55 : 45),
-      fetchNominatimCategory(center, 'things', tuning.nominatimRadius, distanceKm >= 1500 ? 55 : 45),
+      fetchNominatimCategory(center, 'food', tuning.nominatimRadius, boostedFoodLimit),
+      fetchNominatimCategory(center, 'things', tuning.nominatimRadius, boostedThingsLimit),
       fetchNominatimCategory(center, 'scenic', Math.round(tuning.nominatimRadius * 0.95), distanceKm >= 1500 ? 45 : 35),
     ]);
 
@@ -327,9 +336,10 @@ async function buildPoiPool({ originGeo, destinationGeo, scenicness, includeFood
   return dedupePois([...liveDeduped, ...nearestFallback]);
 }
 
-function buildDiscoveryTuning(distanceKm, scenicness) {
+function buildDiscoveryTuning(distanceKm, scenicness, thingsPriority = 50, foodPriority = 50) {
   const shortTripFactor = distanceKm < 260 ? 1 - distanceKm / 260 : 0;
   const longTripFactor = clamp(distanceKm / 3000, 0, 1);
+  const exploreBias = (Math.max(0, thingsPriority) + Math.max(0, foodPriority)) / 200;
   return {
     sampleCount: Math.round(clamp(5 + distanceKm / 360, 5, 15)),
     baseRadius: Math.round(clamp(15000 + scenicness * 550 + shortTripFactor * 16000 + longTripFactor * 6000, 13000, 43000)),
@@ -337,6 +347,8 @@ function buildDiscoveryTuning(distanceKm, scenicness) {
     wikiRadius: Math.round(clamp(28000 + scenicness * 700 + shortTripFactor * 22000 + longTripFactor * 12000, 24000, 90000)),
     jitterKm: clamp(7 + distanceKm * 0.018, 6, 44),
     localExploreKm: shortTripFactor > 0 ? Math.round(18 + shortTripFactor * 30) : 0,
+    detourExploreKm: Math.round(clamp(8 + scenicness * 0.08 + distanceKm * 0.012 + exploreBias * 9, 8, 56)),
+    detourCenterCount: Math.round(clamp(2 + scenicness / 25 + distanceKm / 850 + exploreBias * 2.2, 2, 9)),
     wikiStride: distanceKm >= 2500 ? 3 : 2,
     nominatimStride: distanceKm >= 1800 ? 3 : 2,
     fallbackCount: Math.round(clamp(10 + distanceKm / 320, 10, 30)),
@@ -353,6 +365,8 @@ function buildRouteSampleCenters(originGeo, destinationGeo, tuning) {
     points.push(i === 0 || i === sampleCount - 1 ? point : jitterPointNearRoute(point, tuning.jitterKm));
   }
 
+  points.push(...buildScenicDetourCenters(originGeo, destinationGeo, tuning));
+
   if (tuning.localExploreKm > 0) {
     const mid = interpolate(originGeo, destinationGeo, 0.5);
     [20, 110, 200, 290].forEach((bearing) => {
@@ -361,6 +375,24 @@ function buildRouteSampleCenters(originGeo, destinationGeo, tuning) {
   }
 
   return dedupeCenters(points);
+}
+
+function buildScenicDetourCenters(originGeo, destinationGeo, tuning) {
+  const out = [];
+  const routeBearing = bearingDegrees(originGeo, destinationGeo);
+  const count = Math.max(0, tuning.detourCenterCount || 0);
+
+  for (let i = 0; i < count; i += 1) {
+    const t = (i + 1) / (count + 1);
+    const base = interpolate(originGeo, destinationGeo, t);
+    const side = i % 2 === 0 ? 90 : -90;
+    const sway = (Math.random() * 24) - 12;
+    const detourBearing = routeBearing + side + sway;
+    const detourDistance = tuning.detourExploreKm * (0.75 + Math.random() * 0.5);
+    out.push(offsetPointByKm(base, detourDistance, detourBearing));
+  }
+
+  return out;
 }
 
 function dedupeCenters(points) {
@@ -379,6 +411,15 @@ function jitterPointNearRoute(point, maxJitterKm) {
   const lat = point.lat + dy / 111;
   const lon = point.lon + dx / (111 * Math.cos(toRad(Math.max(-85, Math.min(85, point.lat)))));
   return { lat, lon };
+}
+
+function bearingDegrees(a, b) {
+  const y = Math.sin(toRad(b.lon - a.lon)) * Math.cos(toRad(b.lat));
+  const x =
+    Math.cos(toRad(a.lat)) * Math.sin(toRad(b.lat))
+    - Math.sin(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.cos(toRad(b.lon - a.lon));
+  const deg = (Math.atan2(y, x) * 180) / Math.PI;
+  return (deg + 360) % 360;
 }
 
 function offsetPointByKm(point, distanceKm, bearingDeg) {
@@ -547,9 +588,9 @@ async function fetchWikipediaPois(center, radius) {
   }));
 }
 
-function rankCandidates(candidates, priorities) {
+function rankCandidates(candidates, priorities, routeContext = null) {
   return [...candidates]
-    .map((poi) => ({ ...poi, score: scorePoi(poi, priorities) }))
+    .map((poi) => ({ ...poi, score: scorePoi(poi, priorities, routeContext) }))
     .sort((a, b) => b.score - a.score);
 }
 
@@ -762,7 +803,7 @@ function estimateSleepMinutes(windowMinutes) {
   return fullDays * nightly;
 }
 
-function scorePoi(poi, priorities) {
+function scorePoi(poi, priorities, routeContext = null) {
   const sourceWeight = poi.source === 'overpass' ? 1.9 : poi.source === 'nominatim' ? 1.5 : poi.source === 'wikipedia' ? 1.35 : poi.source === 'town_anchor' ? 1.15 : 0.8;
   const weights = normalizedPriorityWeights(priorities);
 
@@ -788,8 +829,33 @@ function scorePoi(poi, priorities) {
     ? (priorities.food >= 85 ? 1.45 : priorities.food >= 70 ? 1.25 : 1)
     : 1;
   const nonFoodDampener = poi.type !== 'food' && priorities.food >= 85 ? 0.88 : 1;
+  const explorationBoost = routeContext ? offRouteExplorationBoost(poi, routeContext, priorities) : 1;
 
-  return sourceWeight * blended * priorityPush * oppositePenalty * foodIntentBoost * nonFoodDampener;
+  return sourceWeight * blended * priorityPush * oppositePenalty * foodIntentBoost * nonFoodDampener * explorationBoost;
+}
+
+function offRouteExplorationBoost(poi, routeContext, priorities) {
+  const { originGeo, destinationGeo } = routeContext || {};
+  if (!originGeo || !destinationGeo) return 1;
+
+  const routeLengthKm = haversineKm(originGeo, destinationGeo);
+  if (routeLengthKm <= 1) return 1;
+
+  const offRouteKm = distanceToSegmentKm(poi, originGeo, destinationGeo);
+  const idealDetourKm = clamp(8 + routeLengthKm * 0.06, 10, 55);
+  const spread = Math.max(10, idealDetourKm * 0.75);
+  const normalized = (offRouteKm - idealDetourKm) / spread;
+  const gaussian = Math.exp(-0.5 * normalized * normalized);
+
+  // Prioritize non-linear exploration more when scenic preference is high.
+  const scenicFactor = 1 + (Math.max(0, priorities.scenic) / 100) * 0.45;
+  const typeFactor = poi.type === 'food'
+    ? 1 + (Math.max(0, priorities.food) / 100) * 0.5
+    : ['activity', 'museum', 'historic', 'city', 'landmark'].includes(poi.type)
+      ? 1 + (Math.max(0, priorities.thingsToDo) / 100) * 0.5
+      : 1;
+  const boost = 0.84 + gaussian * scenicFactor * typeFactor * 0.4;
+  return clamp(boost, 0.82, 1.65);
 }
 
 function normalizedPriorityWeights(priorities) {
