@@ -6,6 +6,7 @@ const timingSummary = document.getElementById('timingSummary');
 const poiList = document.getElementById('poiList');
 const openGoogle = document.getElementById('openGoogle');
 const openApple = document.getElementById('openApple');
+const exportStatus = document.getElementById('exportStatus');
 const loadingCard = document.getElementById('loadingCard');
 const loadingBar = document.getElementById('loadingBar');
 const loadingText = document.getElementById('loadingText');
@@ -84,6 +85,16 @@ const SIGNIFICANT_LOCATIONS = [
 
 const FALLBACK_POI_CATALOG = [...US_NATIONAL_PARKS, ...SIGNIFICANT_LOCATIONS];
 const reverseCache = new Map();
+let lastRenderedRoute = null;
+let exportLocationCache = null;
+
+openGoogle.addEventListener('click', async (event) => {
+  await handleMapsExportClick(event, 'google');
+});
+
+openApple.addEventListener('click', async (event) => {
+  await handleMapsExportClick(event, 'apple');
+});
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1129,16 +1140,69 @@ function renderPlan(ctx) {
 
   const googleWaypoints = isRoundTrip ? [...outStops, destination, ...retStops].slice(0, MAX_STOPS) : outStops.slice(0, MAX_STOPS);
   const googleDestination = isRoundTrip ? origin : destination;
-
-  openGoogle.href =
-    `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}` +
-    `&destination=${encodeURIComponent(googleDestination)}&travelmode=driving` +
-    (googleWaypoints.length ? `&waypoints=${encodeURIComponent(googleWaypoints.join('|'))}` : '');
-
   const appleStops = isRoundTrip ? [...outStops, destination, ...retStops, origin].slice(0, MAX_STOPS + 1) : [...outStops, destination];
-  openApple.href = `https://maps.apple.com/?saddr=${encodeURIComponent(origin)}&daddr=${encodeURIComponent(appleStops.join(' to:'))}&dirflg=d`;
+
+  lastRenderedRoute = {
+    origin,
+    destination,
+    isRoundTrip,
+    googleWaypoints,
+    googleDestination,
+    appleStops,
+  };
+
+  openGoogle.href = buildGoogleMapsHref(lastRenderedRoute, null);
+  openApple.href = buildAppleMapsHref(lastRenderedRoute, null);
+  if (exportStatus) exportStatus.textContent = 'Map exports will try your current location on supported devices, then fall back to the trip origin.';
 
   results.hidden = false;
+}
+
+async function handleMapsExportClick(event, provider) {
+  if (!lastRenderedRoute) return;
+  event.preventDefault();
+
+  const location = await getCurrentLocationForExport();
+  const href = provider === 'google'
+    ? buildGoogleMapsHref(lastRenderedRoute, location)
+    : buildAppleMapsHref(lastRenderedRoute, location);
+
+  if (exportStatus) {
+    exportStatus.textContent = location
+      ? 'Using your current location for map export.'
+      : 'Current location unavailable, so map export is using the trip origin.';
+  }
+
+  window.open(href, '_blank', 'noopener,noreferrer');
+}
+
+async function getCurrentLocationForExport() {
+  if (exportLocationCache) return exportLocationCache;
+  if (!navigator.geolocation) return null;
+
+  const position = await new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 7000, maximumAge: 120000 },
+    );
+  });
+
+  if (!position) return null;
+  exportLocationCache = `${position.coords.latitude},${position.coords.longitude}`;
+  return exportLocationCache;
+}
+
+function buildGoogleMapsHref(route, currentLocation) {
+  const originParam = currentLocation || route.origin;
+  return `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(originParam)}`
+    + `&destination=${encodeURIComponent(route.googleDestination)}&travelmode=driving`
+    + (route.googleWaypoints.length ? `&waypoints=${encodeURIComponent(route.googleWaypoints.join('|'))}` : '');
+}
+
+function buildAppleMapsHref(route, currentLocation) {
+  const saddr = currentLocation ? `saddr=${encodeURIComponent(currentLocation)}&` : '';
+  return `https://maps.apple.com/?${saddr}daddr=${encodeURIComponent(route.appleStops.join(' to:'))}&dirflg=d`;
 }
 
 async function geocode(query) {
