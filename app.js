@@ -84,6 +84,39 @@ const SIGNIFICANT_LOCATIONS = [
 ];
 
 const FALLBACK_POI_CATALOG = [...US_NATIONAL_PARKS, ...SIGNIFICANT_LOCATIONS];
+
+const FALLBACK_GEOCODER = [
+  { name: 'omaha', lat: 41.2565, lon: -95.9345 },
+  { name: 'denver', lat: 39.7392, lon: -104.9903 },
+  { name: 'chicago', lat: 41.8781, lon: -87.6298 },
+  { name: 'minneapolis', lat: 44.9778, lon: -93.265 },
+  { name: 'kansas city', lat: 39.0997, lon: -94.5786 },
+  { name: 'st louis', lat: 38.627, lon: -90.1994 },
+  { name: 'dallas', lat: 32.7767, lon: -96.797 },
+  { name: 'austin', lat: 30.2672, lon: -97.7431 },
+  { name: 'houston', lat: 29.7604, lon: -95.3698 },
+  { name: 'phoenix', lat: 33.4484, lon: -112.074 },
+  { name: 'las vegas', lat: 36.1699, lon: -115.1398 },
+  { name: 'salt lake city', lat: 40.7608, lon: -111.891 },
+  { name: 'los angeles', lat: 34.0522, lon: -118.2437 },
+  { name: 'san francisco', lat: 37.7749, lon: -122.4194 },
+  { name: 'seattle', lat: 47.6062, lon: -122.3321 },
+  { name: 'portland', lat: 45.5152, lon: -122.6784 },
+  { name: 'new york', lat: 40.7128, lon: -74.006 },
+  { name: 'boston', lat: 42.3601, lon: -71.0589 },
+  { name: 'atlanta', lat: 33.749, lon: -84.388 },
+  { name: 'miami', lat: 25.7617, lon: -80.1918 },
+  { name: 'nashville', lat: 36.1627, lon: -86.7816 },
+  { name: 'new orleans', lat: 29.9511, lon: -90.0715 },
+  { name: 'toronto', lat: 43.6532, lon: -79.3832 },
+  { name: 'montreal', lat: 45.5019, lon: -73.5674 },
+  { name: 'vancouver', lat: 49.2827, lon: -123.1207 },
+  { name: 'calgary', lat: 51.0447, lon: -114.0719 },
+  { name: 'mexico city', lat: 19.4326, lon: -99.1332 },
+  { name: 'guadalajara', lat: 20.6597, lon: -103.3496 },
+  { name: 'monterrey', lat: 25.6866, lon: -100.3161 },
+];
+
 const reverseCache = new Map();
 let lastRenderedRoute = null;
 let exportLocationCache = null;
@@ -1207,10 +1240,38 @@ function buildAppleMapsHref(route, currentLocation) {
 
 async function geocode(query) {
   const url = `${nominatimSearchBase}?q=${encodeURIComponent(query)}&format=json&limit=1`;
-  const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } }, 2);
-  const rows = await response.json();
-  if (!rows.length) throw new Error(`No map match found for "${query}".`);
-  return { lat: Number(rows[0].lat), lon: Number(rows[0].lon) };
+  try {
+    const response = await fetchWithRetry(url, { method: 'GET', headers: { Accept: 'application/json' } }, 2);
+    const rows = await response.json();
+    if (rows.length) {
+      return { lat: Number(rows[0].lat), lon: Number(rows[0].lon) };
+    }
+  } catch {}
+
+  const fallback = geocodeFromFallback(query);
+  if (fallback) return fallback;
+
+  throw new Error(`No map match found for "${query}". Try a nearby major city or include state/province.`);
+}
+
+function geocodeFromFallback(query) {
+  const normalized = normalizePlaceQuery(query);
+  if (!normalized) return null;
+
+  const exact = FALLBACK_GEOCODER.find((entry) => normalized === entry.name || normalized.startsWith(`${entry.name},`) || normalized.startsWith(`${entry.name} `));
+  if (exact) return { lat: exact.lat, lon: exact.lon };
+
+  const partial = FALLBACK_GEOCODER.find((entry) => normalized.includes(entry.name));
+  return partial ? { lat: partial.lat, lon: partial.lon } : null;
+}
+
+function normalizePlaceQuery(query) {
+  return (query || '')
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(/\b(united states|usa|us|canada|mexico)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function estimateDirectDriveMinutes(origin, destination) {
