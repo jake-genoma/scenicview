@@ -137,6 +137,7 @@ form.addEventListener('submit', async (event) => {
   const data = new FormData(form);
   const origin = data.get('origin').toString().trim();
   const destination = data.get('destination').toString().trim();
+  const realDestination = data.get('realDestination').toString().trim();
   const departAt = new Date(data.get('departAt').toString());
   const arriveBy = new Date(data.get('arriveBy').toString());
   const isRoundTrip = roundTripEl.checked;
@@ -282,6 +283,7 @@ form.addEventListener('submit', async (event) => {
     renderPlan({
       origin,
       destination,
+      realDestination,
       isRoundTrip,
       outboundTiming,
       returnTiming,
@@ -1147,8 +1149,10 @@ async function fitStopsToWindow({ stops, originGeo, destinationGeo, windowMinute
 
 function renderPlan(ctx) {
   const {
-    origin, destination, isRoundTrip, outboundTiming, returnTiming, preferredStops, selected,
+    origin, destination, realDestination, isRoundTrip, outboundTiming, returnTiming, preferredStops, selected,
   } = ctx;
+
+  const destinationFocus = realDestination ? ` Destination focus: ${realDestination}.` : '';
 
   const outboundSummary = `Outbound: window ${formatMinutesHuman(outboundTiming.windowMinutes)}, direct ~${formatMinutesHuman(outboundTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(outboundTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(outboundTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(outboundTiming.sleepMinutes)}, wildlife/night reserve ~${formatMinutesHuman(outboundTiming.safetyReserveMinutes || 0)}, used ${formatMinutesHuman(outboundTiming.usedMinutes)}, remaining ${formatMinutesSigned(outboundTiming.slackMinutes)}`;
 
@@ -1156,9 +1160,9 @@ function renderPlan(ctx) {
     const returnSummary = `Return: window ${formatMinutesHuman(returnTiming.windowMinutes)}, direct ~${formatMinutesHuman(returnTiming.directMinutes)}, drive with stops ~${formatMinutesHuman(returnTiming.driveWithStopsMinutes)}, stop time ~${formatMinutesHuman(returnTiming.stopMinutes)}, sleep reserve ~${formatMinutesHuman(returnTiming.sleepMinutes)}, wildlife/night reserve ~${formatMinutesHuman(returnTiming.safetyReserveMinutes || 0)}, used ${formatMinutesHuman(returnTiming.usedMinutes)}, remaining ${formatMinutesSigned(returnTiming.slackMinutes)}`;
     const totalWindow = outboundTiming.windowMinutes + returnTiming.windowMinutes;
     const totalUsed = outboundTiming.usedMinutes + returnTiming.usedMinutes;
-    timingSummary.textContent = `Round trip planned. ${outboundSummary}. ${returnSummary}. Combined used ${formatMinutesHuman(totalUsed)}/${formatMinutesHuman(totalWindow)} (remaining ${formatMinutesSigned(totalWindow - totalUsed)}). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    timingSummary.textContent = `Round trip planned.${destinationFocus} ${outboundSummary}. ${returnSummary}. Combined used ${formatMinutesHuman(totalUsed)}/${formatMinutesHuman(totalWindow)} (remaining ${formatMinutesSigned(totalWindow - totalUsed)}). Total stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   } else {
-    timingSummary.textContent = `One-way trip planned. ${outboundSummary}. Stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
+    timingSummary.textContent = `One-way trip planned.${destinationFocus} ${outboundSummary}. Stops ${selected.length}/${Math.min(preferredStops, MAX_STOPS)}.`;
   }
 
   poiList.innerHTML = '';
